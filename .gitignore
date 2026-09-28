@@ -25,3 +25,4 @@ __pycache__/
 # Machine-specific agent configuration
 .codex/
 .agents/
+.Identifier
