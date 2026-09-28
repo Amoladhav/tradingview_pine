@@ -1,0 +1,329 @@
+//@version=6
+indicator("Adaptive Weekly Stress", shorttitle="AWS", overlay=false)
+
+// Revision: 1.01
+// Weekly, symbol-agnostic stress engine for chart display, Pine Screener columns,
+// and watchlist alerts. Calculations are frozen to the 1W timeframe.
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+
+groupCalc = "Calculation"
+wvfLookback = input.int(
+     22,
+     "WVF Highest-Close Lookback (weeks)",
+     minval=2,
+     group=groupCalc,
+     tooltip="Weekly bars used to find the reference highest close for Williams VIX Fix. Because calculations are frozen to 1W, 22 means 22 weeks."
+ )
+atrLength = input.int(
+     14,
+     "Weekly ATR Length",
+     minval=1,
+     group=groupCalc,
+     tooltip="ATR length used to estimate the symbol's normal weekly movement. ATR is converted to a percent of price before normalization."
+ )
+atrBaselineLength = input.int(
+     26,
+     "ATR% Baseline Median (weeks)",
+     minval=2,
+     group=groupCalc,
+     tooltip="Median lookback used to create a slow weekly ATR% baseline. Median is used so a few unusually large weeks do not inflate the normalization denominator as much as a simple average would."
+ )
+percentileLookback = input.int(
+     156,
+     "Adaptive Percentile Lookback (weeks)",
+     minval=20,
+     maxval=400,
+     group=groupCalc,
+     tooltip="Historical weekly population used to rank normalized stress and stress velocity. 156 weeks is approximately three years and fits comfortably within Pine Screener's 500-bar calculation window."
+ )
+
+groupSignals = "Signal Thresholds"
+longExtremeThreshold = input.float(
+     95.0,
+     "Long Extreme Stress %ile",
+     minval=50.0,
+     maxval=100.0,
+     step=0.5,
+     group=groupSignals,
+     tooltip="Long-watch threshold. A value of 95 means normalized weekly downside stress is at or above roughly the 95th percentile of this symbol's own historical stress distribution."
+ )
+expansionThreshold = input.float(
+     95.0,
+     "Short Expansion Velocity %ile",
+     minval=50.0,
+     maxval=100.0,
+     step=0.5,
+     group=groupSignals,
+     tooltip="Short-watch threshold. A value of 95 means the current week-to-week increase in normalized stress ranks near the most rapid historical stress expansions for this symbol."
+ )
+shortStressFloor = input.float(
+     50.0,
+     "Short Expansion Minimum Stress %ile",
+     minval=0.0,
+     maxval=99.0,
+     step=0.5,
+     group=groupSignals,
+     tooltip="Minimum stress percentile required before the rapid-expansion state can qualify as a Short Expansion signal. The default 50 requires stress to be above its own historical median before a velocity spike can signal."
+ )
+
+groupDisplay = "Display"
+showVelocity = input.bool(
+     true,
+     "Show Velocity %ile",
+     group=groupDisplay,
+     tooltip="Shows the adaptive percentile rank of weekly stress velocity in the indicator pane."
+ )
+showSignalMarkers = input.bool(
+     true,
+     "Show Signal Markers",
+     group=groupDisplay,
+     tooltip="Shows markers when Short Expansion begins, Long Extreme is first breached, and Long Turn begins."
+ )
+showDashboard = input.bool(
+     true,
+     "Show Current-State Table",
+     group=groupDisplay,
+     tooltip="Shows a compact table for the current symbol. The Pine Screener does not read table cells; screener values come from the first ten plots below."
+ )
+showStateBackground = input.bool(
+     true,
+     "Shade Active State",
+     group=groupDisplay,
+     tooltip="Lightly shades the pane for active Short Expansion, Long Extreme, or Long Turn states."
+ )
+
+stressColor = input.color(color.aqua, "Stress %ile Color", group=groupDisplay)
+velocityColor = input.color(color.orange, "Velocity %ile Color", group=groupDisplay)
+longColor = input.color(color.lime, "Long-State Color", group=groupDisplay)
+shortColor = input.color(color.red, "Short-State Color", group=groupDisplay)
+neutralColor = input.color(color.gray, "Neutral Color", group=groupDisplay)
+
+// ============================================================================
+// WEEKLY CALCULATION ENGINE
+// ============================================================================
+
+f_weeklyMetrics() =>
+    float highestClose = ta.highest(close, wvfLookback)
+    float wvf = not na(highestClose) and highestClose != 0.0 ? ((highestClose - low) / highestClose) * 100.0 : na
+
+    float atrValue = ta.atr(atrLength)
+    float atrPercent = not na(close) and close != 0.0 ? (atrValue / close) * 100.0 : na
+    float baselineAtrPercent = ta.median(atrPercent, atrBaselineLength)
+
+    float normalizedStress = not na(baselineAtrPercent) and baselineAtrPercent > 0.0 ? wvf / baselineAtrPercent : na
+    float stressPercentile = ta.percentrank(normalizedStress, percentileLookback)
+
+    float stressVelocity = normalizedStress - normalizedStress[1]
+    float velocityPercentile = ta.percentrank(stressVelocity, percentileLookback)
+
+    bool longExtremeState = not na(stressPercentile) and stressPercentile >= longExtremeThreshold
+    bool longTurnState = longExtremeState and not na(stressVelocity) and stressVelocity < 0.0
+    bool shortExpansionState = not na(velocityPercentile) and stressPercentile >= shortStressFloor and stressPercentile < longExtremeThreshold and stressVelocity > 0.0 and velocityPercentile >= expansionThreshold
+
+    bool longExtremeEvent = ta.crossover(stressPercentile, longExtremeThreshold)
+    bool longTurnEvent = longTurnState and not longTurnState[1]
+    bool shortExpansionEvent = shortExpansionState and not shortExpansionState[1]
+
+    int barsSinceExtreme = ta.barssince(longExtremeEvent)
+
+    [stressPercentile, normalizedStress, velocityPercentile, stressVelocity, wvf, baselineAtrPercent, longExtremeState, longTurnState, shortExpansionState, barsSinceExtreme, longExtremeEvent, longTurnEvent, shortExpansionEvent]
+
+[stressPercentile, normalizedStress, velocityPercentile, stressVelocity, wvf, baselineAtrPercent, longExtremeState, longTurnState, shortExpansionState, barsSinceExtreme, longExtremeEvent, longTurnEvent, shortExpansionEvent] = request.security(syminfo.tickerid, "1W", f_weeklyMetrics(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// ============================================================================
+// FIRST 10 PLOTS = PINE SCREENER COLUMNS
+// Keep these first and in this order. Pine Screener exposes the first ten plots.
+// ============================================================================
+
+plot(
+     stressPercentile,
+     "Stress %ile",
+     color=stressColor,
+     linewidth=2,
+     display=display.pane + display.data_window + display.pine_screener
+ )
+plot(
+     normalizedStress,
+     "Normalized Stress",
+     color=stressColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     velocityPercentile,
+     "Velocity %ile",
+     color=velocityColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     stressVelocity,
+     "Stress Velocity",
+     color=velocityColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     wvf,
+     "WVF",
+     color=neutralColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     baselineAtrPercent,
+     "Baseline ATR %",
+     color=neutralColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     longExtremeState ? 1.0 : 0.0,
+     "Long Extreme",
+     color=longColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     longTurnState ? 1.0 : 0.0,
+     "Long Turn",
+     color=longColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     shortExpansionState ? 1.0 : 0.0,
+     "Short Expansion",
+     color=shortColor,
+     display=display.data_window + display.pine_screener
+ )
+plot(
+     barsSinceExtreme,
+     "Bars Since Extreme",
+     color=neutralColor,
+     display=display.data_window + display.pine_screener
+ )
+
+// ============================================================================
+// CHART REFERENCE LEVELS AND SIGNAL DISPLAY
+// ============================================================================
+
+// Visible velocity line is deliberately separate from the first ten screener plots
+// so the Show Velocity control cannot blank the Pine Screener column.
+plot(
+     showVelocity ? velocityPercentile : na,
+     "Velocity %ile - Chart",
+     color=velocityColor,
+     linewidth=1,
+     display=display.pane
+ )
+
+hline(shortStressFloor, "Short Stress Floor", color=color.new(neutralColor, 55), linestyle=hline.style_dashed)
+hline(longExtremeThreshold, "Long Extreme Threshold", color=color.new(longColor, 25), linestyle=hline.style_dotted)
+hline(expansionThreshold, "Velocity Expansion Threshold", color=color.new(shortColor, 40), linestyle=hline.style_dotted)
+
+plotshape(
+     showSignalMarkers and shortExpansionEvent,
+     title="Short Expansion Marker",
+     style=shape.triangledown,
+     location=location.top,
+     color=shortColor,
+     size=size.tiny,
+     text="S"
+ )
+plotshape(
+     showSignalMarkers and longExtremeEvent,
+     title="Long Extreme Marker",
+     style=shape.circle,
+     location=location.bottom,
+     color=longColor,
+     size=size.tiny,
+     text="X"
+ )
+plotshape(
+     showSignalMarkers and longTurnEvent,
+     title="Long Turn Marker",
+     style=shape.triangleup,
+     location=location.bottom,
+     color=longColor,
+     size=size.small,
+     text="L"
+ )
+
+color stateBackground = na
+if showStateBackground
+    if longTurnState
+        stateBackground := color.new(longColor, 88)
+    else if longExtremeState
+        stateBackground := color.new(longColor, 93)
+    else if shortExpansionState
+        stateBackground := color.new(shortColor, 91)
+
+bgcolor(stateBackground, title="Adaptive Stress State")
+
+// ============================================================================
+// CURRENT-SYMBOL DASHBOARD
+// ============================================================================
+
+string stateText = "NEUTRAL"
+color stateColor = neutralColor
+if longTurnState
+    stateText := "LONG TURN"
+    stateColor := longColor
+else if longExtremeState
+    stateText := "LONG EXTREME"
+    stateColor := longColor
+else if shortExpansionState
+    stateText := "SHORT EXPANSION"
+    stateColor := shortColor
+
+var table dashboard = table.new(position.top_right, 2, 9, border_width=1)
+
+if barstate.islast
+    if showDashboard
+        table.cell(dashboard, 0, 0, "Adaptive Weekly Stress", text_color=color.white, bgcolor=color.new(neutralColor, 55))
+        table.cell(dashboard, 1, 0, "1W", text_color=color.white, bgcolor=color.new(neutralColor, 55))
+
+        table.cell(dashboard, 0, 1, "Stress %ile")
+        table.cell(dashboard, 1, 1, str.tostring(stressPercentile, "#.##"))
+
+        table.cell(dashboard, 0, 2, "Normalized Stress")
+        table.cell(dashboard, 1, 2, str.tostring(normalizedStress, "#.###"))
+
+        table.cell(dashboard, 0, 3, "Velocity %ile")
+        table.cell(dashboard, 1, 3, str.tostring(velocityPercentile, "#.##"))
+
+        table.cell(dashboard, 0, 4, "Stress Velocity")
+        table.cell(dashboard, 1, 4, str.tostring(stressVelocity, "#.###"))
+
+        table.cell(dashboard, 0, 5, "WVF")
+        table.cell(dashboard, 1, 5, str.tostring(wvf, "#.##"))
+
+        table.cell(dashboard, 0, 6, "Baseline ATR %")
+        table.cell(dashboard, 1, 6, str.tostring(baselineAtrPercent, "#.##"))
+
+        table.cell(dashboard, 0, 7, "Bars Since Extreme")
+        table.cell(dashboard, 1, 7, str.tostring(barsSinceExtreme))
+
+        table.cell(dashboard, 0, 8, "State")
+        table.cell(dashboard, 1, 8, stateText, text_color=stateColor)
+    else
+        table.clear(dashboard, 0, 0, 1, 8)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(
+     shortExpansionEvent,
+     title="Adaptive Stress Expansion",
+     message="Adaptive Stress Expansion on {{ticker}}: weekly normalized stress has begun expanding at a historically unusual rate. Stress %ile={{plot(\"Stress %ile\")}}, Velocity %ile={{plot(\"Velocity %ile\")}}."
+ )
+
+alertcondition(
+     longExtremeEvent,
+     title="Adaptive Stress Extreme",
+     message="Adaptive Stress Extreme on {{ticker}}: weekly normalized stress has crossed the configured extreme percentile threshold. Stress %ile={{plot(\"Stress %ile\")}}, Normalized Stress={{plot(\"Normalized Stress\")}}."
+ )
+
+alertcondition(
+     longTurnEvent,
+     title="Adaptive Stress Turn",
+     message="Adaptive Stress Turn on {{ticker}}: weekly stress remains extreme and its week-to-week velocity has turned negative. Stress %ile={{plot(\"Stress %ile\")}}, Stress Velocity={{plot(\"Stress Velocity\")}}."
+ )
