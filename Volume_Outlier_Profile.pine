@@ -1,0 +1,533 @@
+//@version=6
+// Revision: 4.4
+indicator("Volume Outlier Profile v4", shorttitle="Volume Outlier v4", overlay=false, max_lines_count=500)
+
+// ============================================================================
+// HANDOFF / NEXT-THREAD SPEC
+// ============================================================================
+// PURPOSE
+// Fast trigger for unusual HIGH or LOW volume with Fixed or timeframe-aware Adaptive lookbacks.
+//
+// AUTOMATIC ANALYSIS MODE
+// 1) Any time-based intraday chart timeframe below 1D:
+//    Use the chart's own candles and compare each candle only with prior candles that
+//    started at the SAME exchange-time slot on that same chart timeframe.
+//    Example: a 09:30 196m bar compares only with prior 09:30 196m bars.
+//    RVOL, Percentile and Robust Z use the SAME prior same-slot population.
+//    No intraday timeframe list or synthetic fixed-timeframe aggregation is used.
+//
+// 2) Daily / 2D / 3D / Weekly / Monthly:
+//    Slot identity disappears completely.
+//    Use the chart candle's aggregate volume directly.
+//    Daily compares with Daily, Weekly with Weekly, etc.
+//
+// LOOKBACK MODE
+// Fixed = literal prior comparable-observation count on every supported timeframe.
+// Adaptive = automatically changes the population length by chart timeframe.
+//
+// ADAPTIVE HORIZONS
+// Quarterly (~3 Months): 63 prior same-slot intraday observations, 63 Daily, ~32 2D,
+//   21 3D, 13 Weekly. Monthly uses a 12-bar statistical minimum.
+// Structural (~6 Months): 126 prior same-slot intraday observations, 126 Daily, ~63 2D,
+//   42 3D, 26 Weekly. Monthly uses a 24-bar statistical minimum.
+//
+// CENTERED DISPLAY
+// Displayed value = Volume Percentile - 50.
+// +50 = extreme high end, 0 = population middle, -50 = extreme low end.
+//
+// SYMMETRIC TAILS
+// Inner Tail % default 20 creates 20th/80th percentile lines = -30/+30.
+// Extreme Tail % default 5 creates 5th/95th percentile lines = -45/+45.
+//
+// RVOL
+// RVOL = Current Volume / Average Volume of the SAME comparison population.
+// 1.00 = normal, 1.50 = 50% above normal, 2.00 = twice normal, 0.75 = 25% below normal.
+//
+// ROBUST Z
+// Calculated on log(volume) using median and MAD.
+// Positive values are high-volume outliers; negative values are low-volume outliers.
+//
+// PRICE MARKERS
+// VH/H are above candles. L/VL are below candles. Each has an independent switch.
+// ATR controls marker distance only; ATR is NOT part of the volume signal.
+// Optional thin connector lines can link each visible price marker back to its candle.
+//
+// ALERTS
+// Volume Outlier; Very High Volume; High Volume; Low Volume; Very Low Volume.
+//
+// COMPILE SAFETY
+// Keep Pine statements on one line when practical. Avoid multiline chained ternaries
+// and multiline function/alert/input calls.
+
+// ── Lookback.
+groupLookback = "Lookback"
+
+lookbackMode = input.string("Adaptive", "Lookback Mode", options=["Fixed", "Adaptive"], group=groupLookback, tooltip="Fixed: uses exactly the same number of prior comparable observations on every supported timeframe. Choose Fixed when you want complete manual control or need to reproduce an existing setup exactly.\n\nAdaptive: automatically changes the comparison population with the active chart timeframe. Intraday charts use prior same-start-slot observations; Daily and higher use prior bars of that chart timeframe. Recommended for normal use.")
+
+fixedLookbackPeriods = input.int(30, "Fixed Lookback Periods", minval=10, maxval=250, group=groupLookback, tooltip="Used ONLY when Lookback Mode = Fixed.\n\nThis is a literal prior-observation count. On intraday charts, 30 means 30 prior candles from the SAME start-time slot. On Daily, 30 means 30 prior Daily candles. On Weekly, 30 means 30 prior Weekly candles.\n\nIgnored when Lookback Mode = Adaptive.")
+
+adaptiveHorizon = input.string("Quarterly (~3 Months)", "Adaptive Horizon", options=["Quarterly (~3 Months)", "Structural (~6 Months)"], group=groupLookback, tooltip="Used ONLY when Lookback Mode = Adaptive.\n\nQuarterly (~3 Months): approximately one earnings / quarterly institutional-flow cycle. Intraday charts use 63 prior observations from the same start-time slot; Daily uses 63 bars; 2D about 32; 3D 21; Weekly 13. Recommended default.\n\nStructural (~6 Months): approximately two quarterly cycles. Intraday charts use 126 prior same-slot observations; Daily 126; 2D about 63; 3D 42; Weekly 26.\n\nMonthly charts use larger minimum populations because 3 or 6 observations are too small for meaningful percentile and Robust Z statistics.")
+
+// ── Population and symmetric thresholds.
+groupPopulation = "Volume Thresholds"
+
+innerTailPct = input.float(20.0, "Inner Tail %", minval=1.0, maxval=49.0, step=0.5, group=groupPopulation, tooltip="Defines symmetric Low/High thresholds. Default 20 means Low = 20th percentile and High = 80th percentile, displayed at -30 and +30. Smaller values make the inner thresholds more selective.")
+
+extremeTailPct = input.float(5.0, "Extreme Tail %", minval=0.5, maxval=48.0, step=0.5, group=groupPopulation, tooltip="Defines symmetric Very Low/Very High thresholds. Default 5 means Very Low = 5th percentile and Very High = 95th percentile, displayed at -45 and +45. Must be smaller than Inner Tail %.")
+
+// ── Alert / confirmation logic.
+groupAlerts = "Alert Logic"
+
+alertMode = input.string("Very Low OR Very High", "Alert Mode", options=["High or Higher", "Very High Only", "Low or Lower", "Very Low Only", "Low OR High", "Very Low OR Very High"], group=groupAlerts, tooltip="Chooses which percentile region can trigger the combined Volume Outlier alert. High or Higher = High + Very High. Very High Only = extreme upper tail only. Low or Lower = Low + Very Low. Very Low Only = extreme lower tail only. Low OR High = either inner tail or beyond. Very Low OR Very High = only the two extreme tails.")
+
+confirmationMode = input.string("Percentile + RVOL + Robust Z", "Confirmation Mode", options=["Percentile only", "Percentile + RVOL", "Percentile + Robust Z", "Percentile + RVOL + Robust Z"], group=groupAlerts, tooltip="Percentile = rank/rarity in the comparison population. RVOL = current volume divided by the population average. Robust Z = statistical distance from the population center. The strictest option requires all three.")
+
+highRvolMin = input.float(1.25, "High-Tail Minimum RVOL", minval=0.0, maxval=10.0, step=0.05, group=groupAlerts, tooltip="Used for HIGH-volume confirmation when RVOL is part of Confirmation Mode. RVOL 1.00 = normal; 1.25 = 25% above normal; 1.50 = 50% above normal; 2.00 = twice normal.")
+
+lowRvolMax = input.float(0.75, "Low-Tail Maximum RVOL", minval=0.0, maxval=2.0, step=0.05, group=groupAlerts, tooltip="Used for LOW-volume confirmation when RVOL is part of Confirmation Mode. RVOL 0.75 = 25% below normal. RVOL 0.50 = half normal volume.")
+
+robustZAbsMin = input.float(1.50, "Robust Z Minimum Magnitude", minval=0.0, maxval=10.0, step=0.10, group=groupAlerts, tooltip="Used when Robust Z is part of Confirmation Mode. High tail requires Robust Z >= +this value. Low tail requires Robust Z <= -this value. Robust Z uses log(volume), median and MAD.")
+
+// ── Lower-pane display.
+groupDisplay = "Lower Pane"
+
+showThresholds = input.bool(true, "Show Tail Threshold Lines", group=groupDisplay)
+
+intradayColor = input.color(color.blue, "Intraday Color", group=groupDisplay, tooltip="Single color used for all intraday same-slot percentile bars.")
+
+highlightFirstRegularCandle = input.bool(false, "Highlight First Regular-Session Candle", group=groupDisplay, tooltip="Optional display-only highlight for the first regular-session candle. On U.S. equities this is the 09:30 ET candle, shown as 06:30 on a Pacific-time chart.")
+
+firstRegularCandleColor = input.color(color.orange, "First Regular-Session Candle Color", group=groupDisplay)
+
+rolledUpColor = input.color(color.gray, "Daily+ Color", group=groupDisplay)
+
+// ── Price-chart markers.
+groupMarkers = "Price Chart Markers"
+
+showVHMarker = input.bool(true, "Show VH Marker", group=groupMarkers, tooltip="Shows VH above candles classified Very High volume. Intraday uses the candle's same-start-slot history; Daily and higher use prior chart-timeframe candles.")
+
+showHMarker = input.bool(false, "Show H Marker", group=groupMarkers, tooltip="Shows H above candles classified High volume but not Very High.")
+
+showLMarker = input.bool(false, "Show L Marker", group=groupMarkers, tooltip="Shows L below candles classified Low volume but not Very Low.")
+
+showVLMarker = input.bool(true, "Show VL Marker", group=groupMarkers, tooltip="Shows VL below candles classified Very Low volume.")
+
+markerAtrLen = input.int(14, "Marker ATR Length", minval=2, maxval=100, group=groupMarkers, tooltip="ATR is used only to position markers away from price. It does not affect percentile, RVOL, Robust Z or alert logic.")
+
+markerAtrDistance = input.float(1.0, "Marker Distance - ATR", minval=0.0, maxval=10.0, step=0.25, group=groupMarkers, tooltip="Vertical distance from candle to marker. 1.0 = one ATR above High for VH/H or below Low for L/VL. 0.5 = half ATR. 2.0 = two ATR.")
+
+showMarkerConnector = input.bool(false, "Show Marker-to-Candle Connector", group=groupMarkers, tooltip="Draws a vertical line from each visible VH/H/L/VL price marker back to the qualifying candle. Display-only; does not affect volume classification, alerts or marker placement.")
+
+markerConnectorUpperColor = input.color(color.new(color.orange, 35), "Upper Connector Color", group=groupMarkers, tooltip="Color and transparency for VH/H connector lines. Increase transparency in the color picker to make the connector less likely to obscure candle wicks.")
+
+markerConnectorLowerColor = input.color(color.new(color.blue, 35), "Lower Connector Color", group=groupMarkers, tooltip="Color and transparency for L/VL connector lines. Increase transparency in the color picker to make the connector less likely to obscure candle tails.")
+
+markerConnectorWidth = input.int(1, "Connector Line Width", minval=1, maxval=4, group=groupMarkers, tooltip="Thickness of marker connector lines. Pine line width cannot be thinner than 1, so use color transparency when you want a less intrusive connector.")
+
+// ── Helper functions.
+f_median(array<float> values) =>
+    int n = array.size(values)
+    float med = na
+    if n > 0
+        array<float> sorted = array.copy(values)
+        array.sort(sorted, order.ascending)
+        int mid = int(math.floor(n * 0.5))
+        if n % 2 == 1
+            med := array.get(sorted, mid)
+        else
+            med := (array.get(sorted, mid - 1) + array.get(sorted, mid)) * 0.5
+    med
+
+f_percentile_rank(float currentValue, array<float> population) =>
+    int n = array.size(population)
+    float pct = na
+    if n > 0
+        int countLE = 0
+        for i = 0 to n - 1
+            if array.get(population, i) <= currentValue
+                countLE += 1
+        pct := 100.0 * countLE / n
+    pct
+
+f_robust_z_log(float currentValue, array<float> population) =>
+    int n = array.size(population)
+    float rz = na
+    if n > 0 and currentValue > 0
+        array<float> logs = array.new_float()
+        for i = 0 to n - 1
+            float v = array.get(population, i)
+            if v > 0
+                array.push(logs, math.log(v))
+        int logCount = array.size(logs)
+        if logCount > 0
+            float med = f_median(logs)
+            array<float> absDev = array.new_float()
+            for i = 0 to logCount - 1
+                array.push(absDev, math.abs(array.get(logs, i) - med))
+            float mad = f_median(absDev)
+            float robustSigma = 1.4826 * mad
+            if robustSigma > 0
+                rz := (math.log(currentValue) - med) / robustSigma
+            else
+                rz := 0.0
+    rz
+
+f_average(array<float> population) =>
+    float result = na
+    if array.size(population) > 0
+        result := array.avg(population)
+    result
+
+f_push_capped(array<float> population, float value, int cap) =>
+    array.push(population, value)
+    if array.size(population) > cap
+        array.shift(population)
+
+f_min_stat_population(int value) =>
+    int result = value
+    if result < 10
+        result := 10
+    result
+
+// ── Generic intraday same-slot history.
+// Each map key is the candle's exchange-time start slot in seconds since midnight.
+// Each slot owns its own capped history, so no intraday timeframe list is hardcoded.
+type IntradayVolumeSlot
+    int key
+    array<float> volumes
+
+f_get_volume_slot(map<int, IntradayVolumeSlot> slots, int slotKey) =>
+    IntradayVolumeSlot slot = na
+    if slots.contains(slotKey)
+        slot := slots.get(slotKey)
+    else
+        slot := IntradayVolumeSlot.new(slotKey, array.new<float>())
+        slots.put(slotKey, slot)
+    slot
+
+// ── Determine automatic analysis mode.
+float chartTfSeconds = timeframe.in_seconds(timeframe.period)
+bool intradayMode = timeframe.isintraday and not na(chartTfSeconds)
+bool dailyOrHigherMode = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+
+if not intradayMode and not dailyOrHigherMode
+    runtime.error("Volume Outlier Profile v4: unsupported non-time-based chart timeframe.")
+
+// ── Resolve effective lookback.
+int effectiveLookback = fixedLookbackPeriods
+
+if lookbackMode == "Adaptive"
+    bool structural = adaptiveHorizon == "Structural (~6 Months)"
+    int targetTradingDays = 63
+    if structural
+        targetTradingDays := 126
+    if intradayMode
+        effectiveLookback := targetTradingDays
+    else if timeframe.isdaily
+        int dailyMultiplier = timeframe.multiplier
+        effectiveLookback := int(math.ceil(targetTradingDays * 1.0 / dailyMultiplier))
+        effectiveLookback := f_min_stat_population(effectiveLookback)
+    else if timeframe.isweekly
+        int targetWeeks = 13
+        if structural
+            targetWeeks := 26
+        int weeklyMultiplier = timeframe.multiplier
+        effectiveLookback := int(math.ceil(targetWeeks * 1.0 / weeklyMultiplier))
+        effectiveLookback := f_min_stat_population(effectiveLookback)
+    else if timeframe.ismonthly
+        if structural
+            effectiveLookback := 24
+        else
+            effectiveLookback := 12
+
+// ── Native intraday same-start-slot engine.
+// Metrics are calculated from PRIOR same-slot observations. The current candle is
+// added to its slot history only after it is confirmed.
+var map<int, IntradayVolumeSlot> intradaySlots = map.new<int, IntradayVolumeSlot>()
+
+int iSlotKey = 0
+int iPopSize = 0
+float iVolume = na
+float iAvgVol = na
+float iRvol = na
+float iPct = na
+float iRobustZ = na
+float iHigh = na
+float iLow = na
+float iAtr = na
+
+if intradayMode
+    iSlotKey := hour(time) * 3600 + minute(time) * 60 + second(time)
+    IntradayVolumeSlot iSlot = f_get_volume_slot(intradaySlots, iSlotKey)
+    iPopSize := array.size(iSlot.volumes)
+    iVolume := volume
+    iAvgVol := f_average(iSlot.volumes)
+    iPct := f_percentile_rank(volume, iSlot.volumes)
+    iRobustZ := f_robust_z_log(volume, iSlot.volumes)
+    if not na(iAvgVol) and iAvgVol > 0
+        iRvol := volume / iAvgVol
+    iHigh := high
+    iLow := low
+    iAtr := ta.atr(markerAtrLen)
+    if barstate.isconfirmed
+        f_push_capped(iSlot.volumes, volume, effectiveLookback)
+
+// ── Daily-or-higher native chart-timeframe engine.
+f_rollup_engine(int populationCap) =>
+    var array<float> history = array.new_float()
+
+    int popSize = array.size(history)
+    float avgVol = f_average(history)
+    float pct = f_percentile_rank(volume, history)
+    float rz = f_robust_z_log(volume, history)
+    float localRvol = na
+
+    if not na(avgVol) and avgVol > 0
+        localRvol := volume / avgVol
+
+    if barstate.isconfirmed
+        f_push_capped(history, volume, populationCap)
+
+    float localAtr = ta.atr(markerAtrLen)
+
+    [popSize, volume, avgVol, localRvol, pct, rz, high, low, localAtr]
+
+// ── Validate threshold inputs.
+if extremeTailPct >= innerTailPct
+    runtime.error("Extreme Tail % must be smaller than Inner Tail %.")
+
+if innerTailPct >= 50
+    runtime.error("Inner Tail % must be below 50.")
+
+// ── Calculate native chart-timeframe rolled-up metrics.
+[rPopSize, rVolume, rAvgVol, rRvol, rPct, rRobustZ, rHigh, rLow, rAtr] = f_rollup_engine(effectiveLookback)
+
+// ── Select active statistical regime.
+int activePopSize = 0
+float activeVolume = na
+float activeAvgVol = na
+float activeRvol = na
+float activePct = na
+float activeRobustZ = na
+float activeHigh = na
+float activeLow = na
+float activeAtr = na
+bool observationConfirmed = barstate.isconfirmed
+
+if intradayMode
+    activePopSize := iPopSize
+    activeVolume := iVolume
+    activeAvgVol := iAvgVol
+    activeRvol := iRvol
+    activePct := iPct
+    activeRobustZ := iRobustZ
+    activeHigh := iHigh
+    activeLow := iLow
+    activeAtr := iAtr
+else
+    activePopSize := rPopSize
+    activeVolume := rVolume
+    activeAvgVol := rAvgVol
+    activeRvol := rRvol
+    activePct := rPct
+    activeRobustZ := rRobustZ
+    activeHigh := rHigh
+    activeLow := rLow
+    activeAtr := rAtr
+
+bool ready = activePopSize >= effectiveLookback and not na(activePct)
+
+// ── Symmetric percentile thresholds.
+float veryLowPct = extremeTailPct
+float lowPct = innerTailPct
+float highPct = 100.0 - innerTailPct
+float veryHighPct = 100.0 - extremeTailPct
+
+bool isVeryHigh = ready and activePct >= veryHighPct
+bool isHighOrHigher = ready and activePct >= highPct
+bool isHighBand = ready and activePct >= highPct and activePct < veryHighPct
+bool isVeryLow = ready and activePct <= veryLowPct
+bool isLowOrLower = ready and activePct <= lowPct
+bool isLowBand = ready and activePct <= lowPct and activePct > veryLowPct
+
+int tailCode = 0
+
+if isVeryHigh
+    tailCode := 2
+else if isHighBand
+    tailCode := 1
+else if isVeryLow
+    tailCode := -2
+else if isLowBand
+    tailCode := -1
+
+// ── Confirmation mode.
+bool useRvol = false
+
+if confirmationMode == "Percentile + RVOL"
+    useRvol := true
+else if confirmationMode == "Percentile + RVOL + Robust Z"
+    useRvol := true
+
+bool useZ = false
+
+if confirmationMode == "Percentile + Robust Z"
+    useZ := true
+else if confirmationMode == "Percentile + RVOL + Robust Z"
+    useZ := true
+
+bool highRvolPass = true
+bool lowRvolPass = true
+
+if useRvol
+    highRvolPass := not na(activeRvol) and activeRvol >= highRvolMin
+    lowRvolPass := not na(activeRvol) and activeRvol <= lowRvolMax
+
+bool highZPass = true
+bool lowZPass = true
+
+if useZ
+    highZPass := not na(activeRobustZ) and activeRobustZ >= robustZAbsMin
+    lowZPass := not na(activeRobustZ) and activeRobustZ <= -robustZAbsMin
+
+bool highConfirmed = observationConfirmed and highRvolPass and highZPass
+bool lowConfirmed = observationConfirmed and lowRvolPass and lowZPass
+
+// ── Atomic volume-category events.
+bool veryHighEvent = highConfirmed and isVeryHigh
+bool highEvent = highConfirmed and isHighBand
+bool veryLowEvent = lowConfirmed and isVeryLow
+bool lowEvent = lowConfirmed and isLowBand
+
+// ── Combined Volume Outlier condition according to Alert Mode.
+bool selectedHighTail = false
+
+if alertMode == "High or Higher"
+    selectedHighTail := isHighOrHigher
+else if alertMode == "Very High Only"
+    selectedHighTail := isVeryHigh
+else if alertMode == "Low OR High"
+    selectedHighTail := isHighOrHigher
+else if alertMode == "Very Low OR Very High"
+    selectedHighTail := isVeryHigh
+
+bool selectedLowTail = false
+
+if alertMode == "Low or Lower"
+    selectedLowTail := isLowOrLower
+else if alertMode == "Very Low Only"
+    selectedLowTail := isVeryLow
+else if alertMode == "Low OR High"
+    selectedLowTail := isLowOrLower
+else if alertMode == "Very Low OR Very High"
+    selectedLowTail := isVeryLow
+
+bool highOutlierEvent = highConfirmed and selectedHighTail
+bool lowOutlierEvent = lowConfirmed and selectedLowTail
+bool volumeOutlierEvent = highOutlierEvent or lowOutlierEvent
+
+// ── Centered percentile display.
+float centeredPct = na
+
+if ready
+    centeredPct := activePct - 50.0
+
+float innerUpperLine = 50.0 - innerTailPct
+float innerLowerLine = -innerUpperLine
+float extremeUpperLine = 50.0 - extremeTailPct
+float extremeLowerLine = -extremeUpperLine
+
+color activePlotColor = rolledUpColor
+
+if intradayMode
+    activePlotColor := intradayColor
+    if highlightFirstRegularCandle and session.isfirstbar_regular
+        activePlotColor := firstRegularCandleColor
+
+float centeredPlot = na
+
+if ready and barstate.isconfirmed
+    centeredPlot := centeredPct
+
+float innerUpperPlot = na
+float innerLowerPlot = na
+float extremeUpperPlot = na
+float extremeLowerPlot = na
+
+if showThresholds
+    innerUpperPlot := innerUpperLine
+    innerLowerPlot := innerLowerLine
+    extremeUpperPlot := extremeUpperLine
+    extremeLowerPlot := extremeLowerLine
+
+plot(centeredPlot, title="Centered Volume Percentile", color=activePlotColor, linewidth=3, style=plot.style_histogram)
+plot(0, title="Center Line", color=color.new(color.gray, 55), linewidth=1)
+plot(innerUpperPlot, title="High Threshold", color=color.new(color.gray, 55), linewidth=1)
+plot(innerLowerPlot, title="Low Threshold", color=color.new(color.gray, 55), linewidth=1)
+plot(extremeUpperPlot, title="Very High Threshold", color=color.new(color.gray, 20), linewidth=1)
+plot(extremeLowerPlot, title="Very Low Threshold", color=color.new(color.gray, 20), linewidth=1)
+
+// ── Price-chart markers. Each category has an independent switch.
+float markerHighY = na
+float markerLowY = na
+
+if not na(activeAtr)
+    markerHighY := activeHigh + activeAtr * markerAtrDistance
+    markerLowY := activeLow - activeAtr * markerAtrDistance
+
+float vhY = na
+float hY = na
+float lY = na
+float vlY = na
+
+if showVHMarker and veryHighEvent
+    vhY := markerHighY
+
+if showHMarker and highEvent
+    hY := markerHighY
+
+if showLMarker and lowEvent
+    lY := markerLowY
+
+if showVLMarker and veryLowEvent
+    vlY := markerLowY
+
+plotshape(vhY, title="Very High Volume Marker", style=shape.labeldown, location=location.absolute, text="VH", textcolor=color.white, color=color.orange, size=size.tiny, force_overlay=true)
+plotshape(hY, title="High Volume Marker", style=shape.labeldown, location=location.absolute, text="H", textcolor=color.white, color=color.orange, size=size.tiny, force_overlay=true)
+plotshape(lY, title="Low Volume Marker", style=shape.labelup, location=location.absolute, text="L", textcolor=color.white, color=color.blue, size=size.tiny, force_overlay=true)
+plotshape(vlY, title="Very Low Volume Marker", style=shape.labelup, location=location.absolute, text="VL", textcolor=color.white, color=color.blue, size=size.tiny, force_overlay=true)
+
+// ── Optional marker-to-candle connector lines.
+// Display-only. Uses the same event/switch state as the visible price marker.
+bool drawHighConnector = showMarkerConnector and not na(markerHighY) and ((showVHMarker and veryHighEvent) or (showHMarker and highEvent))
+bool drawLowConnector = showMarkerConnector and not na(markerLowY) and ((showLMarker and lowEvent) or (showVLMarker and veryLowEvent))
+
+if drawHighConnector
+    line.new(x1=bar_index, y1=activeHigh, x2=bar_index, y2=markerHighY, xloc=xloc.bar_index, extend=extend.none, color=markerConnectorUpperColor, style=line.style_solid, width=markerConnectorWidth, force_overlay=true)
+
+if drawLowConnector
+    line.new(x1=bar_index, y1=activeLow, x2=bar_index, y2=markerLowY, xloc=xloc.bar_index, extend=extend.none, color=markerConnectorLowerColor, style=line.style_solid, width=markerConnectorWidth, force_overlay=true)
+
+// ── Data Window.
+// Analysis Mode Code: 1 = intraday native same-start-slot history; 2 = Daily-or-higher chart timeframe.
+float modeCode = 2.0
+
+if intradayMode
+    modeCode := 1.0
+
+plot(activeVolume, title="Volume", display=display.data_window)
+plot(activeAvgVol, title="Population Average Volume", display=display.data_window)
+plot(activeRvol, title="RVOL", display=display.data_window)
+plot(activePct, title="Volume Percentile", display=display.data_window)
+plot(activeRobustZ, title="Robust Z", display=display.data_window)
+plot(modeCode, title="Analysis Mode Code", display=display.data_window)
+plot(tailCode, title="Tail Code", display=display.data_window)
+plot(activePopSize, title="Population Size", display=display.data_window)
+plot(effectiveLookback, title="Effective Lookback Periods", display=display.data_window)
+
+// ── Universal alerts.
+alertcondition(volumeOutlierEvent, title="Volume Outlier", message="{{ticker}} | Volume Outlier | Volume={{plot(\"Volume\")}} | RVOL={{plot(\"RVOL\")}}x | Percentile={{plot(\"Volume Percentile\")}} | RobustZ={{plot(\"Robust Z\")}} | TailCode={{plot(\"Tail Code\")}} | Lookback={{plot(\"Effective Lookback Periods\")}}")
+alertcondition(veryHighEvent, title="Very High Volume", message="{{ticker}} | Very High Volume | Volume={{plot(\"Volume\")}} | RVOL={{plot(\"RVOL\")}}x | Percentile={{plot(\"Volume Percentile\")}} | RobustZ={{plot(\"Robust Z\")}}")
+alertcondition(highEvent, title="High Volume", message="{{ticker}} | High Volume | Volume={{plot(\"Volume\")}} | RVOL={{plot(\"RVOL\")}}x | Percentile={{plot(\"Volume Percentile\")}} | RobustZ={{plot(\"Robust Z\")}}")
+alertcondition(lowEvent, title="Low Volume", message="{{ticker}} | Low Volume | Volume={{plot(\"Volume\")}} | RVOL={{plot(\"RVOL\")}}x | Percentile={{plot(\"Volume Percentile\")}} | RobustZ={{plot(\"Robust Z\")}}")
+alertcondition(veryLowEvent, title="Very Low Volume", message="{{ticker}} | Very Low Volume | Volume={{plot(\"Volume\")}} | RVOL={{plot(\"RVOL\")}}x | Percentile={{plot(\"Volume Percentile\")}} | RobustZ={{plot(\"Robust Z\")}}")

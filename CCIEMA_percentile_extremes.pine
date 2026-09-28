@@ -1,0 +1,132 @@
+//@version=6
+indicator(title="CCIEMA", shorttitle="My CCI+EMA", overlay=false)
+
+// ── Inputs
+groupCore = "CCI / EMA"
+cciLength = input.int(20, minval=1, title="CCI Length", group=groupCore,
+     tooltip="Number of bars used to calculate CCI. Default: 20.")
+emaLength = input.int(13, minval=1, title="CCI EMA Length", group=groupCore,
+     tooltip="EMA smoothing length applied to CCI. Default: 13.")
+src = input.source(close, title="Source", group=groupCore,
+     tooltip="Price source used for the CCI calculation. Default: Close.")
+
+// ── Percentile extreme inputs
+groupPct = "Adaptive Percentile Extremes"
+
+pctLookback = input.int(252, minval=20, title="Percentile Lookback", group=groupPct,
+     tooltip="Number of PRIOR bars used to define the adaptive CCI extremes. The current bar is excluded. Higher values are slower and more stable. Default: 252.")
+
+upperPct = input.float(97.0, minval=50.0, maxval=99.9, step=0.5, title="Upper Percentile", group=groupPct,
+     tooltip="Defines the upper CCI extreme. 97 means the threshold is above about 97% of CCI readings in the prior lookback window. Default: 97.")
+
+lowerPct = input.float(3.0, minval=0.1, maxval=50.0, step=0.5, title="Lower Percentile", group=groupPct,
+     tooltip="Defines the lower CCI extreme. 3 means the threshold is below about 97% of CCI readings in the prior lookback window. Default: 3.")
+
+showPctBands = input.bool(true, title="Show Percentile Extreme Bands", group=groupPct,
+     tooltip="Shows the adaptive upper and lower CCI percentile thresholds.")
+pctBandColor = input.color(color.purple, title="Percentile Band Color", group=groupPct,
+     tooltip="Color used for both adaptive percentile extreme bands.")
+pctBandWidth = input.int(1, minval=1, maxval=4, title="Percentile Band Width", group=groupPct,
+     tooltip="Line width for the adaptive percentile extreme bands.")
+
+// ── CCI + EMA
+cciBasis = ta.sma(src, cciLength)
+cci = (src - cciBasis) / (0.015 * ta.dev(src, cciLength))
+cciEma = ta.ema(cci, emaLength)
+
+// ── Traditional channel / reference bounds
+upperBound = 100.0
+lowerBound = -100.0
+
+// ── Adaptive percentile thresholds
+// cci[1] intentionally excludes the current bar so a new spike cannot move
+// the threshold that is being used to judge that same spike.
+upperPctBand = ta.percentile_nearest_rank(cci[1], pctLookback, upperPct)
+lowerPctBand = ta.percentile_nearest_rank(cci[1], pctLookback, lowerPct)
+
+// Current CCI percentile rank is exposed in the Data Window for inspection.
+cciPercentRank = ta.percentrank(cci, pctLookback)
+
+// ── Plots
+// Existing red/green behavior preserved.
+cciColor = cci > cciEma ? color.green : color.red
+
+plot(cci, title="CCI", color=cciColor, linewidth=2)
+plot(cciEma, title="CCI EMA (Signal)", color=color.orange, linewidth=2)
+
+plot(showPctBands ? upperPctBand : na, title="CCI Adaptive Upper Percentile", color=pctBandColor, linewidth=pctBandWidth)
+plot(showPctBands ? lowerPctBand : na, title="CCI Adaptive Lower Percentile", color=pctBandColor, linewidth=pctBandWidth)
+plot(cciPercentRank, title="CCI Percentile Rank", display=display.data_window)
+
+// ── Reference levels
+band200 = hline(200, "CCI +200 Extreme", color=color.red)
+bandUpper = hline(upperBound, "Upper Bound (+100)", color=color.blue)
+bandZero = hline(0, "CCI Zero", color=color.gray)
+bandLower = hline(lowerBound, "Lower Bound (-100)", color=color.blue)
+bandN200 = hline(-200, "CCI -200 Extreme", color=color.red)
+
+fill(bandUpper, bandLower, color=color.new(color.blue, 95), title="CCI Normal Channel")
+
+// ── Existing EMA alert states
+bullCrossEma = ta.crossover(cci, cciEma)
+bearCrossEma = ta.crossunder(cci, cciEma)
+
+bullAboveUpper = cci > upperBound and cci > cciEma
+bearBelowLower = cci < lowerBound and cci < cciEma
+
+bullAboveUpperTrigger = bullAboveUpper and not bullAboveUpper[1]
+bearBelowLowerTrigger = bearBelowLower and not bearBelowLower[1]
+
+exitUpper = ta.crossunder(cci, upperBound)
+exitLower = ta.crossover(cci, lowerBound)
+
+// ── Adaptive percentile extreme state
+upperPctExtreme = not na(upperPctBand) and cci >= upperPctBand
+lowerPctExtreme = not na(lowerPctBand) and cci <= lowerPctBand
+
+// Direction-neutral trigger: fires once when CCI first enters EITHER tail.
+pctExtreme = upperPctExtreme or lowerPctExtreme
+pctExtremeTrigger = pctExtreme and not pctExtreme[1]
+
+// ── Alerts
+alertcondition(
+     bullCrossEma,
+     title="CCI Bullish Cross EMA",
+     message="CCI crossed ABOVE its EMA signal line."
+)
+
+alertcondition(
+     bearCrossEma,
+     title="CCI Bearish Cross EMA",
+     message="CCI crossed BELOW its EMA signal line."
+)
+
+alertcondition(
+     bullAboveUpperTrigger,
+     title="CCI Bullish Above Upper Bound",
+     message="CCI is ABOVE +100 and ABOVE its EMA signal line."
+)
+
+alertcondition(
+     bearBelowLowerTrigger,
+     title="CCI Bearish Below Lower Bound",
+     message="CCI is BELOW -100 and BELOW its EMA signal line."
+)
+
+alertcondition(
+     exitUpper,
+     title="CCI Exit Upper Bound",
+     message="CCI crossed back BELOW the +100 upper bound."
+)
+
+alertcondition(
+     exitLower,
+     title="CCI Exit Lower Bound",
+     message="CCI crossed back ABOVE the -100 lower bound."
+)
+
+alertcondition(
+     pctExtremeTrigger,
+     title="CCI Percentile Extreme - Either Side",
+     message="CCI entered an adaptive percentile extreme on either side."
+)

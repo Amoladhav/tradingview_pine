@@ -1,0 +1,27 @@
+# Local credentials and private artifacts
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials/
+secrets/
+INBOX/
+artifacts/
+# OS/editor state
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+# Optional future local tooling
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# Machine-specific agent configuration
+.codex/
+.agents/

@@ -1,0 +1,101 @@
+//@version=6
+indicator("6:30 First Candle Marker", overlay = true, max_labels_count = 500)
+
+//────────────────────────────────────────────
+// INPUTS
+//────────────────────────────────────────────
+
+// Marker
+showMarker = input.bool(true, "Show Marker")
+
+markerPosition = input.string(
+     "Top",
+     "Marker Position",
+     options = ["Top", "Bottom"]
+     )
+
+markerCharacter = input.string(
+     "◆",
+     "Marker",
+     options = ["◆", "●", "▲", "▼", "★", "✦", "↑", "↓", "!", "•"]
+     )
+
+markerColor = input.color(
+     color.yellow,
+     "Marker Color"
+     )
+
+// Candle highlighting
+colorCandle = input.bool(
+     true,
+     "Color 6:30 Candle"
+     )
+
+candleColor = input.color(
+     color.yellow,
+     "6:30 Candle Color"
+     )
+
+// Time
+targetHour = input.int(
+     6,
+     "Hour",
+     minval = 0,
+     maxval = 23
+     )
+
+targetMinute = input.int(
+     30,
+     "Minute",
+     minval = 0,
+     maxval = 59
+     )
+
+timeZone = input.string(
+     "America/Los_Angeles",
+     "Time Zone",
+     options = [
+         "America/Los_Angeles",
+         "America/New_York"
+     ]
+     )
+
+//────────────────────────────────────────────
+// IDENTIFY TARGET CANDLE
+//────────────────────────────────────────────
+
+isTargetCandle =
+     timeframe.isintraday and
+     hour(time, timeZone) == targetHour and
+     minute(time, timeZone) == targetMinute
+
+//────────────────────────────────────────────
+// COLOR TARGET CANDLE
+//────────────────────────────────────────────
+
+barcolor(
+     colorCandle and isTargetCandle
+         ? candleColor
+         : na
+     )
+
+//────────────────────────────────────────────
+// MARKER
+//────────────────────────────────────────────
+
+if showMarker and isTargetCandle
+
+    markerYLocation =
+         markerPosition == "Top"
+             ? yloc.abovebar
+             : yloc.belowbar
+
+    label.new(
+         bar_index,
+         na,
+         markerCharacter,
+         yloc = markerYLocation,
+         style = label.style_none,
+         textcolor = markerColor,
+         size = size.normal
+         )
