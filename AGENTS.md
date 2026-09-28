@@ -7,8 +7,27 @@ For repository publication or platform setup, also read `docs/SETUP.md`.
 This is an independent Pine v6 indicator repository. The four root `.pine` files
 are canonical; never rename them or add `_v2`/`_final` copies without a request.
 In particular, preserve the existing `Price_Response_To_Colume.pine` spelling.
-The two `ChatGPT_*_Project_Prompt.md` files are identical historical prompt
-references, not task requests. Their iteration rules are incorporated below.
+The requirements from `ChatGPT_TradingView_Project_Prompt.md` and
+`ChatGPT_Trading_Project_Prompt.md` are standing coding instructions incorporated
+below. Both templates are currently identical. Their empty "Current requested
+change" placeholder is not a task; use the owner's actual request. If either
+template changes, review and reconcile its requirements here explicitly.
+
+## Future coding requests
+
+- Apply these instructions to every future feature, fix and code review in this
+  repository. Read the current canonical source from disk, never reconstruct it
+  from conversation memory. Use Git history for versions, not filenames such as
+  `_v2`, `_v3`, `_final` or `_fixed`.
+- Before editing, identify the affected logic, requested acceptance criteria and
+  impact on calculations, display/plots, alerts, settings, timeframes and historical
+  behavior. Preserve everything outside the requested change; avoid unrelated
+  refactoring. If a requirement is incomplete, clarify consequential ambiguity
+  while continuing independent work that is already defined.
+- Keep full runnable source in the canonical file, not just a patch or fragment.
+  For future non-Pine code, carry forward the same source-of-truth, small-change,
+  verification and delivery rules, using the language's appropriate checks. Pine
+  syntax and TradingView compilation requirements apply only to Pine files.
 
 ## Pine change contract
 
@@ -18,11 +37,18 @@ references, not task requests. Their iteration rules are incorporated below.
 - Read the actual current source. Preserve working `request.security()` semantics,
   bar confirmation, repaint/lookahead behavior and historical results. Explain any
   intentional change. Never describe a percentile/ranking as a probability.
-- Prefer explicit, compiler-safe syntax; avoid new chained multiline ternaries.
-  Follow the static review checklist in `docs/VALIDATION.md`. Static review cannot
-  establish successful TradingView compilation or numerical correctness.
+- Prefer explicit, compiler-safe syntax over compact or fragile multiline
+  statements; do not introduce multiline chained ternaries. Perform the full
+  compile-safety/static syntax review in `docs/VALIDATION.md` for Pine code changes.
+  Static review cannot establish successful TradingView compilation or numerical
+  correctness.
 - Call out every alert change. For a new alert, present its exact name and meaning
   for owner validation before marking acceptance complete.
+- Explicitly report alert additions, removals, renames and combinations; preserve
+  existing names and conditions unless the request changes them.
+- Preserve timeframe controls and line/text formatting controls. If a feature
+  cannot work correctly with a frozen timeframe, explain the limitation explicitly.
+  Keep tooltips/pop-up comments concise but sufficient to choose settings correctly.
 - Keep full updated code in its canonical file; report a clickable path, concise
   summary, calculation/display/alert/timeframe impact, checks and pending checks,
   commit ID/message and diff statistics. Use `type(scope): concise description`.
@@ -35,6 +61,27 @@ references, not task requests. Their iteration rules are incorporated below.
   hosted CI are configured. Do not execute credentialed TradingView actions.
 - Update status with the same increment. Keep OS verification separate for native
   Windows, WSL, Ubuntu and macOS. Use UTF-8 and the repository line-ending rules.
+
+## Deliverables for code changes
+
+1. Link the complete updated source using its canonical filename. If delivery is
+   outside the shared workspace, provide the complete file rather than only a diff.
+2. Summarize only what changed and state calculation / display / alert / timeframe
+   impact, including settings and historical behavior when affected.
+3. Report the local commit ID and message, or a suggested message if not committed.
+   Use `type(scope): concise description`: `feat` for functionality, `fix` for
+   corrections, `refactor` for structure without behavior change, `style` for
+   display-only changes, `docs` for documentation/comments and `chore` for maintenance.
+4. Include actual Git diff statistics (files changed, insertions and deletions).
+5. State checks performed and pending checks. For Pine, explicitly state whether
+   TradingView compilation was actually performed; use the static-pass statement
+   above only after completing that pass. For other languages, name the actual
+   tests/build checks and their results. Never imply that static checks prove runtime
+   behavior or strategy performance.
+
+An optional internal Pine version belongs in a short `// Revision: ...` header,
+not a versioned filename. Increment it only for code changes. Documentation-only
+tasks do not require returning unchanged Pine files or claiming a Pine static pass.
 
 ## Shared workspace policy
 

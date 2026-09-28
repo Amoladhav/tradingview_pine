@@ -12,6 +12,11 @@ Prepared: standalone AGENTS instructions (including shared policy revision 7),
 README/script inventory, platform and publication guide, verification checklist,
 Git ignores, line-ending/editor rules and initial source provenance manifest.
 
+Both project prompt templates have been reconciled into explicit standing coding
+instructions in AGENTS.md, including future non-Pine code where applicable,
+frozen-timeframe limitations, tooltip guidance and complete delivery requirements.
+The original templates and all Pine source remain unchanged.
+
 ## Verification
 
 Local Linux setup checks: original-source hash comparison, source inventory,
