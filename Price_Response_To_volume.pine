@@ -1,88 +1,173 @@
 //@version=6
-// Revision: 2.1
+
+// Revision: 2.2
+
 indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false, max_boxes_count=500)
 
 // ============================================================================
+
 // HANDOFF / NEXT-THREAD SPEC
+
 // ============================================================================
+
 // PURPOSE
+
 // Measure how efficiently price moves relative to trading participation.
+
 //
+
 // CORE MEASURES
+
 // Relative Range = Current High-Low / Median prior comparable High-Low range.
+
 // RVOL           = Current Volume / Typical prior comparable Volume.
+
 // Neutral Response = Relative Range / RVOL.
+
 // Body Efficiency  = (Close-Open) / max(High-Low, min tick).
+
 // Directional Response = Neutral Response * Body Efficiency.
+
 //
+
 // INTERPRETATION
+
 // Neutral Response < 1:
+
 //   Volume expanded more than range. More effort, less result. Base/resistance-like.
+
 // Neutral Response > 1:
+
 //   Range expanded more than volume. Price moves easily. Leg/expansion-like.
+
 //
+
 // Directional Response:
+
 //   Positive = Rally response.
+
 //   Negative = Drop response.
+
 //   Near zero = poor directional progress / wick-heavy churn.
+
 //
+
 // AUTOMATIC TIMEFRAME MODE
+
 // A) Any time-based intraday chart timeframe below 1D:
+
 //    Use the chart's native candle and compare its range and volume only with prior
+
 //    candles that started at the SAME exchange-time slot on that same timeframe.
+
 //    Example: a 09:30 196m bar compares only with prior 09:30 196m bars.
+
 //    No intraday timeframe list is hardcoded and no synthetic 130m aggregation is used.
+
 //
+
 // B) Chart timeframe >=Daily:
+
 //    Slot identity disappears.
+
 //    Daily compares with prior Daily bars, 2D with prior 2D bars, Weekly with prior
+
 //    Weekly bars, Monthly with prior Monthly bars.
+
 //
+
 // LOOKBACK MODE
+
 // Fixed:
+
 //    Uses exactly Fixed Lookback Periods on every supported timeframe.
+
 //
+
 // Adaptive:
+
 //    Quarterly (~3 Months):
+
 //      intraday same-slot = 63 observations
+
 //      D=63, 2D~32, 3D~21, W~13, M minimum 12
+
 //    Structural (~6 Months):
+
 //      intraday same-slot = 126 observations
+
 //      D=126, 2D~63, 3D~42, W~26, M minimum 24
+
 //
+
 // VOLUME BASELINE
+
 // Average = classic RVOL denominator.
+
 // Median  = more resistant to isolated giant volume spikes.
+
 //
+
 // RANGE BASELINE
+
 // Always Median because event candles can heavily distort an average range.
+
 //
+
 // VERY-HIGH VOLUME / WEEKLY ZONES
+
 // Very High (VH) volume is defined by the current observation's percentile rank
+
 // versus the same comparison population used by the indicator.
+
 // Default VH threshold = 90th percentile.
+
 //
+
 // On Weekly charts only, an optional VH candle can project:
+
 //   DZ = lower tail zone: Low -> lower edge of candle body.
+
 //   SZ = upper wick zone: upper edge of candle body -> High.
+
 // Zones are created only from confirmed Weekly VH candles and extend for the
+
 // user-selected number of Weekly bars. Zone borders/fills are display-only.
+
 //
+
 // LOWER-PANE MARKERS
+
 // Efficient Rally stays at the pane top.
+
 // Efficient Drop is positioned just below the Strong Drop threshold.
+
 // Resistant Response (orange) is positioned slightly below the red Drop dot.
+
 // Marker positioning is display-only and does not change signal conditions.
+
 //
+
 // ALERTS
-// Intentionally omitted in v2. Candidate alert names still require validation.
+
+// Bullish Momentum = confirmed green Efficient Rally dot. Static true/false condition.
+// Bearish Momentum = confirmed red Efficient Drop dot. Static true/false condition.
+// Base Formation = confirmed orange Resistant Response dot. Static true/false condition.
+// Price Response Numerical = raw Directional Response plot for user-selected numeric alert thresholds.
+// Alert messages include the active numerical response through TradingView plot placeholders.
+
 //
+
 // COMPILE SAFETY
+
 // Prefer one complete Pine statement per line. Avoid multiline chained ternaries,
+
 // multiline function calls, multiline tuple assignments and multiline alerts.
+
 // ============================================================================
 
 // ── Lookback.
+
 groupLookback = "Lookback"
 
 lookbackMode = input.string("Adaptive", "Lookback Mode", options=["Fixed", "Adaptive"], group=groupLookback, tooltip="Fixed: uses exactly the same number of prior comparable observations on every supported timeframe. Use this for manual control or to reproduce an existing setup.\n\nAdaptive: automatically changes the comparison population with the active chart timeframe so intraday, Daily, multi-Day, Weekly and Monthly use comparable market horizons. Recommended for normal use.")
@@ -92,6 +177,7 @@ fixedLookbackPeriods = input.int(30, "Fixed Lookback Periods", minval=10, maxval
 adaptiveHorizon = input.string("Quarterly (~3 Months)", "Adaptive Horizon", options=["Quarterly (~3 Months)", "Structural (~6 Months)"], group=groupLookback, tooltip="Used ONLY in Adaptive mode.\n\nQuarterly (~3 Months): approximately one earnings / quarterly institutional-flow cycle. Examples: 63 same-slot intraday observations, 63 Daily, ~32 2D, ~21 3D, ~13 Weekly. Recommended default.\n\nStructural (~6 Months): approximately two quarterly cycles. Examples: 126 same-slot intraday observations, 126 Daily, ~63 2D, ~42 3D, ~26 Weekly.\n\nMonthly uses minimum populations of 12 or 24 because 3-6 observations are too small for stable normalization.")
 
 // ── Logic.
+
 groupLogic = "Response Logic"
 
 volumeBaselineMethod = input.string("Average", "Volume Baseline", options=["Average", "Median"], group=groupLogic, tooltip="Average: classic RVOL. RVOL 1.0 means current volume equals the average of the comparison population.\n\nMedian: more robust when occasional earnings/rebalance spikes pull the average upward.\n\nRange always uses a median baseline.")
@@ -101,11 +187,13 @@ lowResponseThreshold = input.float(0.75, "Low Neutral Response", minval=0.05, ma
 highDirectionalThreshold = input.float(1.25, "Strong Directional Response", minval=0.05, maxval=10.0, step=0.05, group=groupLogic, tooltip="Absolute Directional Response at or above this value is flagged as a strong Rally/Drop response.\n\nPositive values are Rally response. Negative values are Drop response.")
 
 // ── Very-high volume classification.
+
 groupVolumeState = "Volume State"
 
 vhPercentileThreshold = input.float(90.0, "VH Volume Percentile", minval=50.0, maxval=99.0, step=1.0, group=groupVolumeState, tooltip="Defines Very High (VH) volume from the same comparison population used by the indicator.\n\nDefault 90 means current volume must be at or above the 90th percentile of prior comparable volume observations.\n\nOn intraday charts the percentile is same-start-slot. On Weekly charts it is versus prior Weekly observations.")
 
 // ── Display.
+
 groupDisplay = "Display"
 
 showDirectionalResponse = input.bool(true, "Show Directional Response", group=groupDisplay, tooltip="Main plot. Neutral Response multiplied by signed Body Efficiency.\n\nPositive = Rally response.\nNegative = Drop response.\nNear zero = weak directional result / churn.")
@@ -121,13 +209,19 @@ showBodyEfficiency = input.bool(false, "Show Signed Body Efficiency", group=grou
 showThresholds = input.bool(true, "Show Response Thresholds", group=groupDisplay)
 
 rallyColor = input.color(color.lime, "Rally Response Color", group=groupDisplay)
+
 dropColor = input.color(color.red, "Drop Response Color", group=groupDisplay)
+
 neutralColor = input.color(color.blue, "Neutral Response Color", group=groupDisplay)
+
 rangeColor = input.color(color.orange, "Relative Range Color", group=groupDisplay)
+
 rvolColor = input.color(color.purple, "RVOL Color", group=groupDisplay)
+
 bodyColor = input.color(color.gray, "Body Efficiency Color", group=groupDisplay)
 
 // ── Marker placement.
+
 groupMarkers = "Markers"
 
 redDotOffset = input.float(0.35, "Red Dot Offset Below Drop Threshold", minval=0.05, maxval=5.0, step=0.05, group=groupMarkers, tooltip="Display-only spacing in response units. The red Efficient Drop dot is placed below the Strong Drop Response threshold so it does not sit on the red line. Default 0.35 gives a clearly visible separation on the normal 1.25 threshold setup.")
@@ -135,11 +229,13 @@ redDotOffset = input.float(0.35, "Red Dot Offset Below Drop Threshold", minval=0
 orangeDotSpacing = input.float(0.25, "Orange Dot Spacing Below Red", minval=0.05, maxval=5.0, step=0.05, group=groupMarkers, tooltip="Display-only spacing in response units. The orange Resistant Response dot is placed below the red Efficient Drop dot. Default 0.25 keeps the two lower markers clearly separated.")
 
 // ── Weekly VH zones.
+
 groupZones = "Weekly VH Zones"
 
 showWeeklyVhZones = input.bool(false, "Show Weekly VH Zones", group=groupZones, tooltip="Weekly charts only. Draws zones from confirmed Very High (VH) volume candles.\n\nDZ uses the candle's lower tail: Low to lower body edge.\nSZ uses the candle's upper wick: upper body edge to High.\n\nThis is display-only and does not alter response calculations.")
 
 showDemandZones = input.bool(true, "Show DZ (Lower Tail)", group=groupZones)
+
 showSupplyZones = input.bool(true, "Show SZ (Upper Wick)", group=groupZones)
 
 weeklyZoneLength = input.int(8, "Zone Length (Weekly Bars)", minval=1, maxval=104, group=groupZones, tooltip="How many Weekly bars each VH zone extends to the right from the qualifying candle.")
@@ -147,312 +243,530 @@ weeklyZoneLength = input.int(8, "Zone Length (Weekly Bars)", minval=1, maxval=10
 weeklyZoneLineWidth = input.int(1, "Zone Border Width", minval=1, maxval=5, group=groupZones)
 
 demandZoneColor = input.color(color.green, "DZ Border / Fill Color", group=groupZones)
+
 supplyZoneColor = input.color(color.red, "SZ Border / Fill Color", group=groupZones)
 
 weeklyZoneFillTransparency = input.int(88, "Zone Fill Transparency", minval=0, maxval=100, group=groupZones, tooltip="0 = opaque fill. 100 = fully transparent fill.")
 
 // ── Helpers.
+
 f_median(array<float> values) =>
+
     int n = array.size(values)
+
     float med = na
+
     if n > 0
+
         array<float> sorted = array.copy(values)
+
         array.sort(sorted, order.ascending)
+
         int mid = int(math.floor(n * 0.5))
+
         if n % 2 == 1
+
             med := array.get(sorted, mid)
+
         else
+
             med := (array.get(sorted, mid - 1) + array.get(sorted, mid)) * 0.5
+
     med
 
 f_average(array<float> values) =>
+
     float result = na
+
     if array.size(values) > 0
+
         result := array.avg(values)
+
     result
 
 f_percent_rank(array<float> values, float currentValue) =>
+
     float result = na
+
     int n = array.size(values)
+
     if n > 0 and not na(currentValue)
+
         int atOrBelow = 0
+
         for i = 0 to n - 1
+
             float priorValue = array.get(values, i)
+
             if priorValue <= currentValue
+
                 atOrBelow += 1
+
         result := 100.0 * atOrBelow / n
+
     result
 
 f_push_capped(array<float> values, float value, int cap) =>
+
     array.push(values, value)
+
     if array.size(values) > cap
+
         array.shift(values)
 
 f_min_stat_population(int value) =>
+
     int result = value
+
     if result < 10
+
         result := 10
+
     result
 
 f_volume_baseline(array<float> values) =>
+
     float result = na
+
     if volumeBaselineMethod == "Median"
+
         result := f_median(values)
+
     else
+
         result := f_average(values)
+
     result
 
 // ── Generic intraday same-slot history.
+
 // Each map key is the candle's exchange-time start slot in seconds since midnight.
+
 // Each slot owns prior range and volume histories for this chart timeframe.
+
 type IntradayResponseSlot
+
     int key
+
     array<float> ranges
+
     array<float> volumes
 
 f_get_response_slot(map<int, IntradayResponseSlot> slots, int slotKey) =>
+
     IntradayResponseSlot slot = na
+
     if slots.contains(slotKey)
+
         slot := slots.get(slotKey)
+
     else
+
         slot := IntradayResponseSlot.new(slotKey, array.new<float>(), array.new<float>())
+
         slots.put(slotKey, slot)
+
     slot
 
 // ── Determine automatic mode.
+
 float chartTfSeconds = timeframe.in_seconds(timeframe.period)
 
 bool chartIsIntraday = timeframe.isintraday and not na(chartTfSeconds)
+
 bool chartIsDailyOrHigher = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
 
 if not chartIsIntraday and not chartIsDailyOrHigher
+
     runtime.error("Price Response to Volume v2: unsupported non-time-based chart timeframe.")
 
 // ── Adaptive lookback mapping.
+
 int effectiveLookback = fixedLookbackPeriods
 
 if lookbackMode == "Adaptive"
+
     bool structural = adaptiveHorizon == "Structural (~6 Months)"
+
     int targetTradingDays = 63
+
     if structural
+
         targetTradingDays := 126
 
     if chartIsIntraday
+
         effectiveLookback := targetTradingDays
+
     else if timeframe.isdaily
+
         int dailyMultiplier = timeframe.multiplier
+
         effectiveLookback := int(math.ceil(targetTradingDays * 1.0 / dailyMultiplier))
+
         effectiveLookback := f_min_stat_population(effectiveLookback)
+
     else if timeframe.isweekly
+
         int targetWeeks = 13
+
         if structural
+
             targetWeeks := 26
+
         int weeklyMultiplier = timeframe.multiplier
+
         effectiveLookback := int(math.ceil(targetWeeks * 1.0 / weeklyMultiplier))
+
         effectiveLookback := f_min_stat_population(effectiveLookback)
+
     else if timeframe.ismonthly
+
         if structural
+
             effectiveLookback := 24
+
         else
+
             effectiveLookback := 12
 
 // ── Calculate response from already-known baselines.
+
 f_response(float rangePx, float volumeValue, float rangeBase, float volumeBase, float openValue, float closeValue) =>
+
     float relativeRange = na
+
     float rvol = na
+
     float neutralResponse = na
+
     float bodyEfficiency = na
+
     float directionalResponse = na
 
     if not na(rangeBase) and rangeBase > 0
+
         relativeRange := rangePx / rangeBase
 
     if not na(volumeBase) and volumeBase > 0
+
         rvol := volumeValue / volumeBase
 
     if not na(relativeRange) and not na(rvol) and rvol > 0
+
         neutralResponse := relativeRange / rvol
 
     float safeRange = math.max(rangePx, syminfo.mintick)
+
     bodyEfficiency := (closeValue - openValue) / safeRange
 
     if not na(neutralResponse)
+
         directionalResponse := neutralResponse * bodyEfficiency
 
     [relativeRange, rvol, neutralResponse, bodyEfficiency, directionalResponse]
 
 // ── Native intraday same-start-slot engine.
+
 // Baselines use PRIOR same-slot observations only. The current candle is added only
+
 // after confirmation, which keeps historical/replay values stable after bar close.
+
 var map<int, IntradayResponseSlot> intradaySlots = map.new<int, IntradayResponseSlot>()
 
 int iPopSize = 0
+
 float iRelativeRange = na
+
 float iRvol = na
+
 float iNeutralResponse = na
+
 float iBodyEfficiency = na
+
 float iDirectionalResponse = na
+
 float iVolumePercentile = na
 
 if chartIsIntraday
+
     int iSlotKey = hour(time) * 3600 + minute(time) * 60 + second(time)
+
     IntradayResponseSlot iSlot = f_get_response_slot(intradaySlots, iSlotKey)
+
     float iRangePx = high - low
+
     iPopSize := array.size(iSlot.ranges)
+
     float iRangeBase = f_median(iSlot.ranges)
+
     float iVolumeBase = f_volume_baseline(iSlot.volumes)
+
     iVolumePercentile := f_percent_rank(iSlot.volumes, volume)
+
     [localRelativeRange, localRvol, localNeutralResponse, localBodyEfficiency, localDirectionalResponse] = f_response(iRangePx, volume, iRangeBase, iVolumeBase, open, close)
+
     iRelativeRange := localRelativeRange
+
     iRvol := localRvol
+
     iNeutralResponse := localNeutralResponse
+
     iBodyEfficiency := localBodyEfficiency
+
     iDirectionalResponse := localDirectionalResponse
+
     if barstate.isconfirmed
+
         f_push_capped(iSlot.ranges, iRangePx, effectiveLookback)
+
         f_push_capped(iSlot.volumes, volume, effectiveLookback)
 
 // ── Daily-or-higher native engine.
+
 f_rollup_engine(int populationCap) =>
+
     var array<float> ranges = array.new_float()
+
     var array<float> volumes = array.new_float()
 
     float rangePx = high - low
+
     int popSize = array.size(ranges)
+
     float rangeBase = f_median(ranges)
+
     float volumeBase = f_volume_baseline(volumes)
+
     float volumePercentile = f_percent_rank(volumes, volume)
 
     [relativeRange, localRvol, neutralResponse, bodyEfficiency, directionalResponse] = f_response(rangePx, volume, rangeBase, volumeBase, open, close)
 
     if barstate.isconfirmed
+
         f_push_capped(ranges, rangePx, populationCap)
+
         f_push_capped(volumes, volume, populationCap)
 
     [popSize, relativeRange, localRvol, neutralResponse, bodyEfficiency, directionalResponse, volumePercentile]
 
 // ── Native chart-timeframe values for Daily and higher.
+
 [rPopSize, rRelativeRange, rRvol, rNeutralResponse, rBodyEfficiency, rDirectionalResponse, rVolumePercentile] = f_rollup_engine(effectiveLookback)
 
 // ── Select active regime.
+
 int activePopSize = 0
+
 float relativeRange = na
+
 float rvol = na
+
 float neutralResponse = na
+
 float bodyEfficiency = na
+
 float directionalResponse = na
+
 float volumePercentile = na
 
 if chartIsIntraday
+
     activePopSize := iPopSize
+
     relativeRange := iRelativeRange
+
     rvol := iRvol
+
     neutralResponse := iNeutralResponse
+
     bodyEfficiency := iBodyEfficiency
+
     directionalResponse := iDirectionalResponse
+
     volumePercentile := iVolumePercentile
+
 else
+
     activePopSize := rPopSize
+
     relativeRange := rRelativeRange
+
     rvol := rRvol
+
     neutralResponse := rNeutralResponse
+
     bodyEfficiency := rBodyEfficiency
+
     directionalResponse := rDirectionalResponse
+
     volumePercentile := rVolumePercentile
 
 bool ready = activePopSize >= effectiveLookback
+
 bool displayObservation = barstate.isconfirmed
 
 float directionalPlot = na
+
 float neutralPlot = na
+
 float rangePlot = na
+
 float rvolPlot = na
+
 float bodyPlot = na
 
 if ready and displayObservation
+
     if showDirectionalResponse
+
         directionalPlot := directionalResponse
+
     if showNeutralResponse
+
         neutralPlot := neutralResponse
+
     if showRelativeRange
+
         rangePlot := relativeRange
+
     if showRvol
+
         rvolPlot := rvol
+
     if showBodyEfficiency
+
         bodyPlot := bodyEfficiency
 
 color directionalColor = rallyColor
 
 if not na(directionalResponse) and directionalResponse < 0
+
     directionalColor := dropColor
 
 plot(directionalPlot, title="Directional Price Response", color=directionalColor, linewidth=2, style=plot.style_histogram)
+
 plot(neutralPlot, title="Neutral Price Response", color=neutralColor, linewidth=1)
+
 plot(rangePlot, title="Relative Range", color=rangeColor, linewidth=1)
+
 plot(rvolPlot, title="RVOL", color=rvolColor, linewidth=1)
+
 plot(bodyPlot, title="Signed Body Efficiency", color=bodyColor, linewidth=1)
+
 plot(0.0, title="Directional Center", color=color.new(color.gray, 45), linewidth=1)
 
 // ── Optional neutral-response guides.
+
 float neutralBalanced = na
+
 float lowResponseLine = na
+
 float positiveDirectionalLine = na
+
 float negativeDirectionalLine = na
 
 if showThresholds
+
     if showNeutralResponse
+
         neutralBalanced := 1.0
+
         lowResponseLine := lowResponseThreshold
+
     positiveDirectionalLine := highDirectionalThreshold
+
     negativeDirectionalLine := -highDirectionalThreshold
 
 plot(neutralBalanced, title="Neutral Balanced Response", color=color.new(color.gray, 65), linewidth=1)
+
 plot(lowResponseLine, title="Low Neutral Response Threshold", color=color.new(color.orange, 35), linewidth=1)
+
 plot(positiveDirectionalLine, title="Strong Rally Response Threshold", color=color.new(color.green, 35), linewidth=1)
+
 plot(negativeDirectionalLine, title="Strong Drop Response Threshold", color=color.new(color.red, 35), linewidth=1)
 
 // ── Lower-pane markers.
+
 bool resistantResponse = ready and displayObservation and not na(neutralResponse) and neutralResponse <= lowResponseThreshold
+
 bool efficientRally = ready and displayObservation and not na(directionalResponse) and directionalResponse >= highDirectionalThreshold
+
 bool efficientDrop = ready and displayObservation and not na(directionalResponse) and directionalResponse <= -highDirectionalThreshold
 
 float redDotY = -highDirectionalThreshold - redDotOffset
+
 float orangeDotY = redDotY - orangeDotSpacing
 
 plotshape(resistantResponse ? orangeDotY : na, title="Resistant Response Marker", style=shape.circle, location=location.absolute, color=color.orange, size=size.tiny)
+
 plotshape(efficientRally, title="Efficient Rally Response Marker", style=shape.circle, location=location.top, color=rallyColor, size=size.tiny)
+
 plotshape(efficientDrop ? redDotY : na, title="Efficient Drop Response Marker", style=shape.circle, location=location.absolute, color=dropColor, size=size.tiny)
 
 // ── Very-high volume classification.
+
 bool veryHighVolume = ready and displayObservation and not na(volumePercentile) and volumePercentile >= vhPercentileThreshold
 
 // ── Optional Weekly VH zones on the main price chart.
-// Confirmed Weekly bars only. No lookahead. No alert changes.
+
+// Confirmed Weekly bars only. No lookahead. Weekly zones do not affect alert conditions.
+
 if showWeeklyVhZones and timeframe.isweekly and veryHighVolume and barstate.isconfirmed
+
     float bodyLow = math.min(open, close)
+
     float bodyHigh = math.max(open, close)
+
     int zoneRight = bar_index + weeklyZoneLength
 
     if showDemandZones and bodyLow > low
+
         box.new(left=bar_index, top=bodyLow, right=zoneRight, bottom=low, xloc=xloc.bar_index, border_color=demandZoneColor, border_width=weeklyZoneLineWidth, bgcolor=color.new(demandZoneColor, weeklyZoneFillTransparency), force_overlay=true)
 
     if showSupplyZones and high > bodyHigh
+
         box.new(left=bar_index, top=high, right=zoneRight, bottom=bodyHigh, xloc=xloc.bar_index, border_color=supplyZoneColor, border_width=weeklyZoneLineWidth, bgcolor=color.new(supplyZoneColor, weeklyZoneFillTransparency), force_overlay=true)
 
 // ── Data Window.
+
 // Mode Code 1 = intraday native same-start-slot history. Mode Code 2 = Daily-or-higher native rollup.
+
 float modeCode = 2.0
 
 if chartIsIntraday
+
     modeCode := 1.0
 
 plot(relativeRange, title="Relative Range Data", display=display.data_window)
+
 plot(rvol, title="RVOL Data", display=display.data_window)
+
 plot(neutralResponse, title="Neutral Price Response Data", display=display.data_window)
-plot(directionalResponse, title="Directional Price Response Data", display=display.data_window)
+
+plot(directionalResponse, title="Price Response Numerical", display=display.data_window)
+
 plot(bodyEfficiency, title="Signed Body Efficiency Data", display=display.data_window)
+
 plot(volumePercentile, title="Volume Percentile Data", display=display.data_window)
+
 plot(veryHighVolume ? 1.0 : 0.0, title="VH Volume Flag", display=display.data_window)
+
 plot(modeCode, title="Analysis Mode Code", display=display.data_window)
+
 plot(activePopSize, title="Population Size", display=display.data_window)
+
 plot(effectiveLookback, title="Effective Lookback Periods", display=display.data_window)
+
+// ── Alerts.
+
+// These conditions mirror the existing confirmed-bar marker logic exactly.
+// They are static true/false choices in TradingView, so no numeric value is required.
+// For a threshold-based numerical alert, select the "Price Response Numerical" plot
+// in TradingView and choose the desired operator/value in the alert dialog.
+
+alertcondition(efficientRally, title="Bullish Momentum", message='{{ticker}} Bullish Momentum | Price Response={{plot("Price Response Numerical")}} | Interval={{interval}}')
+
+alertcondition(efficientDrop, title="Bearish Momentum", message='{{ticker}} Bearish Momentum | Price Response={{plot("Price Response Numerical")}} | Interval={{interval}}')
+
+alertcondition(resistantResponse, title="Base Formation", message='{{ticker}} Base Formation | Neutral Response={{plot("Neutral Price Response Data")}} | Price Response={{plot("Price Response Numerical")}} | Interval={{interval}}')
