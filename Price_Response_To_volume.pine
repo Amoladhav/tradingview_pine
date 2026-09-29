@@ -1,6 +1,6 @@
 //@version=6
 
-// Revision: 2.2
+// Revision: 2.3
 
 indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false, max_boxes_count=500)
 
@@ -150,11 +150,17 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 
 // ALERTS
 
-// Bullish Momentum = confirmed green Efficient Rally dot. Static true/false condition.
-// Bearish Momentum = confirmed red Efficient Drop dot. Static true/false condition.
-// Base Formation = confirmed orange Resistant Response dot. Static true/false condition.
-// Price Response Numerical = raw Directional Response plot for user-selected numeric alert thresholds.
-// Alert messages include the active numerical response through TradingView plot placeholders.
+// Bullish Momentum: true when the confirmed green Efficient Rally dot appears.
+
+// Bearish Momentum: true when the confirmed red Efficient Drop dot appears.
+
+// Momentum Either side: true when either Bullish Momentum OR Bearish Momentum is true.
+
+// Base Formation: true when the confirmed orange Resistant Response dot appears.
+
+// Price Response Numerical: raw Directional Response series exposed for numeric alerts.
+
+// Boolean alerts require no alert-dialog threshold. Numeric alerts intentionally do.
 
 //
 
@@ -694,6 +700,8 @@ bool efficientRally = ready and displayObservation and not na(directionalRespons
 
 bool efficientDrop = ready and displayObservation and not na(directionalResponse) and directionalResponse <= -highDirectionalThreshold
 
+bool momentumEitherSide = efficientRally or efficientDrop
+
 float redDotY = -highDirectionalThreshold - redDotOffset
 
 float orangeDotY = redDotY - orangeDotSpacing
@@ -704,13 +712,27 @@ plotshape(efficientRally, title="Efficient Rally Response Marker", style=shape.c
 
 plotshape(efficientDrop ? redDotY : na, title="Efficient Drop Response Marker", style=shape.circle, location=location.absolute, color=dropColor, size=size.tiny)
 
+// ── Alerts.
+
+// These Boolean conditions exactly mirror the confirmed colored-dot states above.
+
+// No numeric value is required in TradingView for these four named conditions.
+
+alertcondition(efficientRally, title="Bullish Momentum", message="Bullish Momentum | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
+
+alertcondition(efficientDrop, title="Bearish Momentum", message="Bearish Momentum | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
+
+alertcondition(momentumEitherSide, title="Momentum Either side", message="Momentum Either side | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
+
+alertcondition(resistantResponse, title="Base Formation", message="Base Formation | {{ticker}} | {{interval}} | Neutral Response={{plot(\"Neutral Price Response Data\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
+
 // ── Very-high volume classification.
 
 bool veryHighVolume = ready and displayObservation and not na(volumePercentile) and volumePercentile >= vhPercentileThreshold
 
 // ── Optional Weekly VH zones on the main price chart.
 
-// Confirmed Weekly bars only. No lookahead. Weekly zones do not affect alert conditions.
+// Confirmed Weekly bars only. No lookahead. Weekly zones do not alter alert conditions.
 
 if showWeeklyVhZones and timeframe.isweekly and veryHighVolume and barstate.isconfirmed
 
@@ -757,16 +779,3 @@ plot(modeCode, title="Analysis Mode Code", display=display.data_window)
 plot(activePopSize, title="Population Size", display=display.data_window)
 
 plot(effectiveLookback, title="Effective Lookback Periods", display=display.data_window)
-
-// ── Alerts.
-
-// These conditions mirror the existing confirmed-bar marker logic exactly.
-// They are static true/false choices in TradingView, so no numeric value is required.
-// For a threshold-based numerical alert, select the "Price Response Numerical" plot
-// in TradingView and choose the desired operator/value in the alert dialog.
-
-alertcondition(efficientRally, title="Bullish Momentum", message='{{ticker}} Bullish Momentum | Price Response={{plot("Price Response Numerical")}} | Interval={{interval}}')
-
-alertcondition(efficientDrop, title="Bearish Momentum", message='{{ticker}} Bearish Momentum | Price Response={{plot("Price Response Numerical")}} | Interval={{interval}}')
-
-alertcondition(resistantResponse, title="Base Formation", message='{{ticker}} Base Formation | Neutral Response={{plot("Neutral Price Response Data")}} | Price Response={{plot("Price Response Numerical")}} | Interval={{interval}}')
