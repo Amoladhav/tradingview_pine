@@ -1,0 +1,337 @@
+//@version=6
+// Revision: 1.01
+// Ratio-Adjusted Summation Index (RASI)
+// Methodology: McClellan ratio-adjusted advance/decline breadth.
+
+indicator("Ratio-Adjusted Summation Index", shorttitle = "RASI", overlay = false, precision = 1, dynamic_requests = true)
+
+// ============================================================================
+// Inputs
+// ============================================================================
+const string GROUP_DATA = "Data"
+const string GROUP_LEVELS = "Reference Levels"
+const string GROUP_DISPLAY = "Display"
+const string GROUP_ALERTS = "Alerts"
+
+string marketInput = input.string(
+     "NYSE",
+     "Breadth market",
+     options = ["NYSE", "NASDAQ"],
+     tooltip = "Selects the TradingView advancing and declining issue series used for the calculation. The RASI calculation itself is always performed on daily breadth data.",
+     group = GROUP_DATA)
+
+float upperLevelInput = input.float(
+     500.0,
+     "Upper reference",
+     step = 50.0,
+     tooltip = "McClellan commonly uses a move well above +500 after an oversold reading as evidence of strong breadth recovery.",
+     group = GROUP_LEVELS)
+
+float lowerLevelInput = input.float(
+     -500.0,
+     "Lower reference",
+     step = 50.0,
+     tooltip = "McClellan commonly treats readings below -500 as a materially oversold breadth condition.",
+     group = GROUP_LEVELS)
+
+bool showRAMOInput = input.bool(
+     false,
+     "Show RAMO",
+     tooltip = "Plots the Ratio-Adjusted McClellan Oscillator: 10% Trend minus 5% Trend.",
+     group = GROUP_DISPLAY)
+
+bool showTrendsInput = input.bool(
+     false,
+     "Show 10% / 5% Trends",
+     tooltip = "Plots the two exponentially smoothed ratio-adjusted breadth trends used to calculate RAMO and RASI.",
+     group = GROUP_DISPLAY)
+
+bool showTableInput = input.bool(
+     true,
+     "Show status table",
+     tooltip = "Shows the selected breadth market, current RASI/RAMO values, daily RASI direction, and threshold states.",
+     group = GROUP_DISPLAY)
+
+// Composite alert controls. These do not change the RASI calculation.
+// Alerts are intentionally restricted to confirmed 1D chart bars. The underlying
+// breadth calculation is daily on every chart, but Pine alert evaluation follows
+// the chart bars. Using a 1D chart prevents weekly/intraday chart aggregation from
+// delaying or obscuring a daily breadth transition.
+bool enableDeteriorationAlertInput = input.bool(
+     true,
+     "Enable Breadth Deterioration",
+     tooltip = "Daily-bar-close alert. Triggers when RASI crosses below 0 while RAMO is negative and RASI is falling. This confirms weakening breadth through the neutral line; it is a risk-review signal, not an automatic sell signal.",
+     group = GROUP_ALERTS)
+
+bool enableDeepWeaknessAlertInput = input.bool(
+     true,
+     "Enable Deep Weakness",
+     tooltip = "Daily-bar-close alert. Triggers when RASI crosses below the editable lower reference level (default -500) while RAMO is negative. It identifies broad internal weakness; it is not a standalone oversold buy signal.",
+     group = GROUP_ALERTS)
+
+bool enableEarlyRecoveryAlertInput = input.bool(
+     true,
+     "Enable Early Recovery",
+     tooltip = "Daily-bar-close alert. Triggers while RASI is still below 0 when RAMO crosses above 0 and RASI rises versus the prior day. This is an early breadth-repair signal before RASI itself returns to neutral.",
+     group = GROUP_ALERTS)
+
+bool enableRecoveryConfirmedAlertInput = input.bool(
+     true,
+     "Enable Recovery Confirmed",
+     tooltip = "Daily-bar-close alert. Triggers when RASI crosses above 0 while RAMO is positive and RASI is rising. This indicates breadth repair has progressed back through the neutral line.",
+     group = GROUP_ALERTS)
+
+bool enableStrongRecoveryAlertInput = input.bool(
+     true,
+     "Enable Strong Recovery",
+     tooltip = "Daily-bar-close alert. Triggers when RASI crosses above the editable upper reference level (default +500) while RAMO is positive and RASI is rising. This identifies a broad, strongly participating recovery rather than a simple positive reading.",
+     group = GROUP_ALERTS)
+
+// ============================================================================
+// Breadth symbols
+// ============================================================================
+string advanceTicker = marketInput == "NASDAQ" ? "USI:ADVN.NQ" : "USI:ADVN.NY"
+string declineTicker = marketInput == "NASDAQ" ? "USI:DECL.NQ" : "USI:DECL.NY"
+
+// ============================================================================
+// Daily RASI calculation
+// ============================================================================
+// The outer request establishes the daily advancing-issues context.
+// The nested declining-issues request uses an empty timeframe so it inherits
+// that same daily context. This keeps the 19/39 EMA calculation genuinely daily
+// even when the chart itself is intraday, weekly, monthly, or another timeframe.
+f_calcRasi(string declineSymbol) =>
+    float declines = request.security(
+         symbol = declineSymbol,
+         timeframe = "",
+         expression = close,
+         gaps = barmerge.gaps_off,
+         lookahead = barmerge.lookahead_off,
+         ignore_invalid_symbol = true)
+
+    float advances = close
+    float totalIssues = advances + declines
+    float raad = na
+
+    if not na(advances) and not na(declines) and totalIssues > 0.0
+        raad := 1000.0 * (advances - declines) / totalIssues
+
+    // 19-day EMA = 10% tracking rate; 39-day EMA = 5% tracking rate.
+    float trend10 = ta.ema(raad, 19)
+    float trend5 = ta.ema(raad, 39)
+    float ramo = trend10 - trend5
+
+    // Calibrated ratio-adjusted Summation Index with zero as neutral:
+    // RASI = -9 * 10% Trend + 19 * 5% Trend.
+    float rasi = -9.0 * trend10 + 19.0 * trend5
+    float priorDailyRasi = rasi[1]
+    float priorDailyRamo = ramo[1]
+
+    [rasi, ramo, trend10, trend5, raad, priorDailyRasi, priorDailyRamo]
+
+[rasi, ramo, trend10, trend5, raad, priorDailyRasi, priorDailyRamo] = request.security(
+     symbol = advanceTicker,
+     timeframe = "1D",
+     expression = f_calcRasi(declineTicker),
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off,
+     ignore_invalid_symbol = true)
+
+// ============================================================================
+// Display
+// ============================================================================
+plot(rasi, title = "RASI", color = color.blue, linewidth = 2)
+plot(showRAMOInput ? ramo : na, title = "RAMO", color = color.orange, linewidth = 1)
+plot(showTrendsInput ? trend10 : na, title = "10% Trend", color = color.purple, linewidth = 1)
+plot(showTrendsInput ? trend5 : na, title = "5% Trend", color = color.teal, linewidth = 1)
+
+hline(0.0, title = "Neutral (0)", color = color.gray, linestyle = hline.style_solid)
+hline(upperLevelInput, title = "Upper Reference", color = color.new(color.green, 35), linestyle = hline.style_dashed)
+hline(lowerLevelInput, title = "Lower Reference", color = color.new(color.red, 35), linestyle = hline.style_dashed)
+
+// ============================================================================
+// Composite daily alerts
+// ============================================================================
+// IMPORTANT: The RASI values above are calculated from 1D breadth regardless of
+// chart timeframe. The alert state below is deliberately enabled only on a 1D
+// chart and only on a confirmed bar close. This avoids treating a weekly chart
+// close as if it were a daily signal and avoids intraday alerts from an unfinished
+// daily breadth reading.
+bool isDailyAlertChart = timeframe.isdaily and timeframe.multiplier == 1
+bool dailyAlertGate = isDailyAlertChart and barstate.isconfirmed
+
+bool hasRasiPair = not na(rasi) and not na(priorDailyRasi)
+bool hasRamoPair = not na(ramo) and not na(priorDailyRamo)
+bool rasiRising = hasRasiPair and rasi > priorDailyRasi
+bool rasiFalling = hasRasiPair and rasi < priorDailyRasi
+
+// Explicit cross tests use the prior DAILY values returned from the daily request.
+// This is more robust than relying on chart-timeframe history when the indicator
+// is viewed on a non-daily chart. Alerts themselves remain gated to the 1D chart.
+bool rasiCrossBelowZero = hasRasiPair and rasi < 0.0 and priorDailyRasi >= 0.0
+bool rasiCrossBelowLower = hasRasiPair and rasi < lowerLevelInput and priorDailyRasi >= lowerLevelInput
+bool ramoCrossAboveZero = hasRamoPair and ramo > 0.0 and priorDailyRamo <= 0.0
+bool rasiCrossAboveZero = hasRasiPair and rasi > 0.0 and priorDailyRasi <= 0.0
+bool rasiCrossAboveUpper = hasRasiPair and rasi > upperLevelInput and priorDailyRasi <= upperLevelInput
+
+// 1) Breadth Deterioration
+//    RASI crosses below neutral, RAMO is already negative, and RASI is falling.
+//    Intended use: review market risk and become more selective with new longs.
+bool breadthDeterioration = dailyAlertGate and enableDeteriorationAlertInput and rasiCrossBelowZero and ramo < 0.0 and rasiFalling
+
+// 2) Deep Weakness
+//    RASI crosses below the lower reference while the breadth oscillator is negative.
+//    Intended use: identify substantial internal damage; do not treat it as a buy.
+bool deepWeakness = dailyAlertGate and enableDeepWeaknessAlertInput and rasiCrossBelowLower and ramo < 0.0
+
+// 3) Early Recovery
+//    RASI remains below neutral, but RAMO crosses positive and RASI rises versus
+//    the prior day. This is intentionally earlier than a RASI zero-line recovery.
+bool earlyRecovery = dailyAlertGate and enableEarlyRecoveryAlertInput and rasi < 0.0 and ramoCrossAboveZero and rasiRising
+
+// 4) Recovery Confirmed
+//    RASI crosses back above neutral with positive RAMO and rising RASI.
+bool recoveryConfirmed = dailyAlertGate and enableRecoveryConfirmedAlertInput and rasiCrossAboveZero and ramo > 0.0 and rasiRising
+
+// 5) Strong Recovery
+//    RASI reaches the upper reference with positive RAMO and rising RASI.
+//    Default +500 is intended as a breadth-strength confirmation zone, not a
+//    mechanical entry threshold.
+bool strongRecovery = dailyAlertGate and enableStrongRecoveryAlertInput and rasiCrossAboveUpper and ramo > 0.0 and rasiRising
+
+alertcondition(
+     breadthDeterioration,
+     title = "RASI Breadth Deterioration",
+     message = "RASI Breadth Deterioration: confirmed daily RASI crossed below 0 while RAMO is negative and RASI is falling. Review market breadth risk; this is not a standalone sell signal.")
+
+alertcondition(
+     deepWeakness,
+     title = "RASI Deep Weakness",
+     message = "RASI Deep Weakness: confirmed daily RASI crossed below the lower reference while RAMO is negative. Broad internal weakness is established; this is not a standalone oversold buy signal.")
+
+alertcondition(
+     earlyRecovery,
+     title = "RASI Early Recovery",
+     message = "RASI Early Recovery: confirmed daily RASI remains below 0, RAMO crossed above 0, and RASI is rising. Breadth repair has begun before neutral is recovered.")
+
+alertcondition(
+     recoveryConfirmed,
+     title = "RASI Recovery Confirmed",
+     message = "RASI Recovery Confirmed: confirmed daily RASI crossed above 0 while RAMO is positive and RASI is rising. Breadth repair has progressed through neutral.")
+
+alertcondition(
+     strongRecovery,
+     title = "RASI Strong Recovery",
+     message = "RASI Strong Recovery: confirmed daily RASI crossed above the upper reference while RAMO is positive and RASI is rising. Broad participation has reached the strong-recovery zone.")
+
+// ============================================================================
+// Status table
+// ============================================================================
+f_valueText(float value) =>
+    string result = "N/A"
+    if not na(value)
+        result := str.tostring(value, "#.0")
+    result
+
+f_dailyDirection(float currentValue, float previousValue) =>
+    string result = "N/A"
+    if not na(currentValue) and not na(previousValue)
+        if currentValue > previousValue
+            result := "Rising"
+        else if currentValue < previousValue
+            result := "Falling"
+        else
+            result := "Flat"
+    result
+
+f_directionColor(float currentValue, float previousValue) =>
+    color result = color.gray
+    if not na(currentValue) and not na(previousValue)
+        if currentValue > previousValue
+            result := color.green
+        else if currentValue < previousValue
+            result := color.red
+    result
+
+string zeroState = "N/A"
+if not na(rasi)
+    if rasi > 0.0
+        zeroState := "Above 0"
+    else if rasi < 0.0
+        zeroState := "Below 0"
+    else
+        zeroState := "At 0"
+
+string upperState = "N/A"
+if not na(rasi)
+    if rasi >= upperLevelInput
+        upperState := "At / Above"
+    else
+        upperState := "Below"
+
+string lowerState = "N/A"
+if not na(rasi)
+    if rasi <= lowerLevelInput
+        lowerState := "At / Below"
+    else
+        lowerState := "Above"
+
+color zeroStateColor = color.gray
+if not na(rasi)
+    if rasi > 0.0
+        zeroStateColor := color.green
+    else if rasi < 0.0
+        zeroStateColor := color.red
+
+color upperStateColor = color.gray
+if not na(rasi)
+    if rasi >= upperLevelInput
+        upperStateColor := color.green
+
+color lowerStateColor = color.gray
+if not na(rasi)
+    if rasi <= lowerLevelInput
+        lowerStateColor := color.red
+
+var table statusTable = table.new(
+     position.top_right,
+     2,
+     8,
+     frame_color = color.new(color.gray, 50),
+     frame_width = 1,
+     border_color = color.new(color.gray, 80),
+     border_width = 1)
+
+if barstate.islast
+    if showTableInput
+        color labelBg = color.new(color.gray, 88)
+        color valueBg = color.new(color.black, 88)
+        color textColor = chart.fg_color
+
+        table.cell(statusTable, 0, 0, "Market", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 0, marketInput, text_color = textColor, bgcolor = valueBg)
+
+        table.cell(statusTable, 0, 1, "RASI", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 1, f_valueText(rasi), text_color = textColor, bgcolor = valueBg)
+
+        table.cell(statusTable, 0, 2, "RAMO", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 2, f_valueText(ramo), text_color = textColor, bgcolor = valueBg)
+
+        table.cell(statusTable, 0, 3, "Daily direction", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 3, f_dailyDirection(rasi, priorDailyRasi), text_color = f_directionColor(rasi, priorDailyRasi), bgcolor = valueBg)
+
+        table.cell(statusTable, 0, 4, "Zero state", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 4, zeroState, text_color = zeroStateColor, bgcolor = valueBg)
+
+        table.cell(statusTable, 0, 5, "+ level", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 5, upperState, text_color = upperStateColor, bgcolor = valueBg)
+
+        table.cell(statusTable, 0, 6, "- level", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 6, lowerState, text_color = lowerStateColor, bgcolor = valueBg)
+
+        string alertTfText = isDailyAlertChart ? "Daily ready" : "Use 1D chart"
+        color alertTfColor = isDailyAlertChart ? color.green : color.orange
+        table.cell(statusTable, 0, 7, "Alert TF", text_color = textColor, bgcolor = labelBg)
+        table.cell(statusTable, 1, 7, alertTfText, text_color = alertTfColor, bgcolor = valueBg)
+    else
+        table.clear(statusTable, 0, 0, 1, 7)
