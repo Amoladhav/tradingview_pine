@@ -1,7 +1,7 @@
 //@version=6
 indicator("Adaptive Weekly Stress", shorttitle="AWS", overlay=false)
 
-// Revision: 1.01
+// Revision: 1.02
 // Weekly, symbol-agnostic stress engine for chart display, Pine Screener columns,
 // and watchlist alerts. Calculations are frozen to the 1W timeframe.
 
@@ -10,6 +10,15 @@ indicator("Adaptive Weekly Stress", shorttitle="AWS", overlay=false)
 // ============================================================================
 
 groupCalc = "Calculation"
+weeklyDataMode = input.string(
+     "Developing Weekly",
+     "Weekly Data Mode",
+     options=["Developing Weekly", "Confirmed Weekly"],
+     group=groupCalc,
+     tooltip="Developing Weekly uses the current in-progress weekly bar and can change before the weekly close. Confirmed Weekly uses only the last completed weekly bar for stable, non-repainting weekly values."
+ )
+useConfirmedWeekly = weeklyDataMode == "Confirmed Weekly"
+
 wvfLookback = input.int(
      22,
      "WVF Highest-Close Lookback (weeks)",
@@ -105,7 +114,7 @@ neutralColor = input.color(color.gray, "Neutral Color", group=groupDisplay)
 // WEEKLY CALCULATION ENGINE
 // ============================================================================
 
-f_weeklyMetrics() =>
+f_weeklyMetrics(bool previousWeek) =>
     float highestClose = ta.highest(close, wvfLookback)
     float wvf = not na(highestClose) and highestClose != 0.0 ? ((highestClose - low) / highestClose) * 100.0 : na
 
@@ -129,9 +138,40 @@ f_weeklyMetrics() =>
 
     int barsSinceExtreme = ta.barssince(longExtremeEvent)
 
-    [stressPercentile, normalizedStress, velocityPercentile, stressVelocity, wvf, baselineAtrPercent, longExtremeState, longTurnState, shortExpansionState, barsSinceExtreme, longExtremeEvent, longTurnEvent, shortExpansionEvent]
+    float outStressPercentile = previousWeek ? stressPercentile[1] : stressPercentile
+    float outNormalizedStress = previousWeek ? normalizedStress[1] : normalizedStress
+    float outVelocityPercentile = previousWeek ? velocityPercentile[1] : velocityPercentile
+    float outStressVelocity = previousWeek ? stressVelocity[1] : stressVelocity
+    float outWvf = previousWeek ? wvf[1] : wvf
+    float outBaselineAtrPercent = previousWeek ? baselineAtrPercent[1] : baselineAtrPercent
+    bool outLongExtremeState = previousWeek ? longExtremeState[1] : longExtremeState
+    bool outLongTurnState = previousWeek ? longTurnState[1] : longTurnState
+    bool outShortExpansionState = previousWeek ? shortExpansionState[1] : shortExpansionState
+    int outBarsSinceExtreme = previousWeek ? barsSinceExtreme[1] : barsSinceExtreme
+    bool outLongExtremeEvent = previousWeek ? longExtremeEvent[1] : longExtremeEvent
+    bool outLongTurnEvent = previousWeek ? longTurnEvent[1] : longTurnEvent
+    bool outShortExpansionEvent = previousWeek ? shortExpansionEvent[1] : shortExpansionEvent
 
-[stressPercentile, normalizedStress, velocityPercentile, stressVelocity, wvf, baselineAtrPercent, longExtremeState, longTurnState, shortExpansionState, barsSinceExtreme, longExtremeEvent, longTurnEvent, shortExpansionEvent] = request.security(syminfo.tickerid, "1W", f_weeklyMetrics(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+    [outStressPercentile, outNormalizedStress, outVelocityPercentile, outStressVelocity, outWvf, outBaselineAtrPercent, outLongExtremeState, outLongTurnState, outShortExpansionState, outBarsSinceExtreme, outLongExtremeEvent, outLongTurnEvent, outShortExpansionEvent]
+
+[devStressPercentile, devNormalizedStress, devVelocityPercentile, devStressVelocity, devWvf, devBaselineAtrPercent, devLongExtremeState, devLongTurnState, devShortExpansionState, devBarsSinceExtreme, devLongExtremeEvent, devLongTurnEvent, devShortExpansionEvent] = request.security(syminfo.tickerid, "1W", f_weeklyMetrics(false), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+[confStressPercentile, confNormalizedStress, confVelocityPercentile, confStressVelocity, confWvf, confBaselineAtrPercent, confLongExtremeState, confLongTurnState, confShortExpansionState, confBarsSinceExtreme, confLongExtremeEventRaw, confLongTurnEventRaw, confShortExpansionEventRaw] = request.security(syminfo.tickerid, "1W", f_weeklyMetrics(true), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+float stressPercentile = useConfirmedWeekly ? confStressPercentile : devStressPercentile
+float normalizedStress = useConfirmedWeekly ? confNormalizedStress : devNormalizedStress
+float velocityPercentile = useConfirmedWeekly ? confVelocityPercentile : devVelocityPercentile
+float stressVelocity = useConfirmedWeekly ? confStressVelocity : devStressVelocity
+float wvf = useConfirmedWeekly ? confWvf : devWvf
+float baselineAtrPercent = useConfirmedWeekly ? confBaselineAtrPercent : devBaselineAtrPercent
+bool longExtremeState = useConfirmedWeekly ? confLongExtremeState : devLongExtremeState
+bool longTurnState = useConfirmedWeekly ? confLongTurnState : devLongTurnState
+bool shortExpansionState = useConfirmedWeekly ? confShortExpansionState : devShortExpansionState
+int barsSinceExtreme = useConfirmedWeekly ? confBarsSinceExtreme : devBarsSinceExtreme
+
+bool newWeeklyPeriod = timeframe.change("1W")
+bool longExtremeEvent = useConfirmedWeekly ? confLongExtremeEventRaw and newWeeklyPeriod : devLongExtremeEvent
+bool longTurnEvent = useConfirmedWeekly ? confLongTurnEventRaw and newWeeklyPeriod : devLongTurnEvent
+bool shortExpansionEvent = useConfirmedWeekly ? confShortExpansionEventRaw and newWeeklyPeriod : devShortExpansionEvent
 
 // ============================================================================
 // FIRST 10 PLOTS = PINE SCREENER COLUMNS
@@ -278,7 +318,7 @@ var table dashboard = table.new(position.top_right, 2, 9, border_width=1)
 if barstate.islast
     if showDashboard
         table.cell(dashboard, 0, 0, "Adaptive Weekly Stress", text_color=color.white, bgcolor=color.new(neutralColor, 55))
-        table.cell(dashboard, 1, 0, "1W", text_color=color.white, bgcolor=color.new(neutralColor, 55))
+        table.cell(dashboard, 1, 0, useConfirmedWeekly ? "1W CONF" : "1W DEV", text_color=color.white, bgcolor=color.new(neutralColor, 55))
 
         table.cell(dashboard, 0, 1, "Stress %ile")
         table.cell(dashboard, 1, 1, str.tostring(stressPercentile, "#.##"))

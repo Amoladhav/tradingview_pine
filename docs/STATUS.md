@@ -4,6 +4,15 @@ Updated: 2026-09-28.
 
 ## Current phase
 
+Adaptive Weekly Stress revision 1.02 check-in: adds Developing Weekly (default)
+and Confirmed Weekly modes. Confirmed mode offsets all weekly outputs by one bar
+and gates event signals on the start of a new weekly period. The dashboard shows
+the selected mode; existing alert names remain unchanged, but their event timing
+depends on the mode. User edits were preserved during check-in.
+Staged whitespace and secret checks passed. TradingView compilation and chart /
+alert acceptance remain pending, including chart intervals above one week; the
+confirmed-mode non-repainting claim is not validated for those intervals.
+
 Repository and agent bootstrap. Four existing Pine v6 indicators and two identical
 prompt templates are retained with unchanged working-file bytes. There is no
 application runtime, dependency installation, order service or active hosted CI.
