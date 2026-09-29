@@ -1,6 +1,6 @@
 //@version=6
 
-// Revision: 2.3
+// Revision: 2.6
 
 indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false, max_boxes_count=500)
 
@@ -161,6 +161,18 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 // Price Response Numerical: raw Directional Response series exposed for numeric alerts.
 
 // Boolean alerts require no alert-dialog threshold. Numeric alerts intentionally do.
+
+// DISPLAY / ALERT CONFIRMATION
+
+// Main numerical response plots are allowed to update on the live realtime bar so the current
+
+// developing Daily/Weekly/etc. response remains visible before the bar closes.
+
+// Historical bars remain stable because they are already confirmed.
+
+// Colored-dot signals, alerts and VH classification remain strict barstate.isconfirmed, so
+
+// live display changes do not create provisional momentum/base alerts. No clock fallback is used.
 
 //
 
@@ -610,7 +622,11 @@ else
 
 bool ready = activePopSize >= effectiveLookback
 
-bool displayObservation = barstate.isconfirmed
+bool confirmedObservation = barstate.isconfirmed
+
+// Display the current realtime bar as it develops; signals/alerts below still require confirmation.
+
+bool displayObservation = confirmedObservation or barstate.isrealtime
 
 float directionalPlot = na
 
@@ -694,11 +710,11 @@ plot(negativeDirectionalLine, title="Strong Drop Response Threshold", color=colo
 
 // ── Lower-pane markers.
 
-bool resistantResponse = ready and displayObservation and not na(neutralResponse) and neutralResponse <= lowResponseThreshold
+bool resistantResponse = ready and confirmedObservation and not na(neutralResponse) and neutralResponse <= lowResponseThreshold
 
-bool efficientRally = ready and displayObservation and not na(directionalResponse) and directionalResponse >= highDirectionalThreshold
+bool efficientRally = ready and confirmedObservation and not na(directionalResponse) and directionalResponse >= highDirectionalThreshold
 
-bool efficientDrop = ready and displayObservation and not na(directionalResponse) and directionalResponse <= -highDirectionalThreshold
+bool efficientDrop = ready and confirmedObservation and not na(directionalResponse) and directionalResponse <= -highDirectionalThreshold
 
 bool momentumEitherSide = efficientRally or efficientDrop
 
@@ -728,7 +744,7 @@ alertcondition(resistantResponse, title="Base Formation", message="Base Formatio
 
 // ── Very-high volume classification.
 
-bool veryHighVolume = ready and displayObservation and not na(volumePercentile) and volumePercentile >= vhPercentileThreshold
+bool veryHighVolume = ready and confirmedObservation and not na(volumePercentile) and volumePercentile >= vhPercentileThreshold
 
 // ── Optional Weekly VH zones on the main price chart.
 
