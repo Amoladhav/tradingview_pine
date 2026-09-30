@@ -1,6 +1,6 @@
 //@version=6
 
-// Revision: 2.6
+// Revision: 2.7
 
 indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false, max_boxes_count=500)
 
@@ -159,6 +159,10 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 // Base Formation: true when the confirmed orange Resistant Response dot appears.
 
 // Price Response Numerical: raw Directional Response series exposed for numeric alerts.
+
+// Signed Body Efficiency Numerical: raw signed candle-body efficiency exposed for numeric alerts.
+
+// Both numerical series remain independent of the named Boolean dot alerts.
 
 // Boolean alerts require no alert-dialog threshold. Numeric alerts intentionally do.
 
@@ -784,7 +788,9 @@ plot(neutralResponse, title="Neutral Price Response Data", display=display.data_
 
 plot(directionalResponse, title="Price Response Numerical", display=display.data_window)
 
-plot(bodyEfficiency, title="Signed Body Efficiency Data", display=display.data_window)
+// Keep both raw numerical measures as explicit plots so TradingView can use them as
+// numerical alert filters without changing the named Boolean signal conditions.
+plot(bodyEfficiency, title="Signed Body Efficiency Numerical", display=display.data_window)
 
 plot(volumePercentile, title="Volume Percentile Data", display=display.data_window)
 
