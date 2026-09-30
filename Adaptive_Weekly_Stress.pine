@@ -1,55 +1,89 @@
 //@version=6
+
 indicator("Adaptive Weekly Stress", shorttitle="AWS", overlay=false)
 
-// Revision: 1.02
-// Weekly, symbol-agnostic stress engine for chart display, Pine Screener columns,
-// and watchlist alerts. Calculations are frozen to the 1W timeframe.
+// Revision: 1.03
+// Symbol-agnostic stress engine for chart display, Pine Screener columns,
+// and watchlist alerts.
+//
+// TIMEFRAME BEHAVIOR
+// - Intraday charts below 130 minutes use a 130-minute analysis floor.
+// - 130m and 195m charts use their native chart timeframe.
+// - Other intraday charts above 130m use their native timeframe; the intended
+//   quality-validated intraday workflow is 130m or 195m.
+// - Daily and higher charts use their native chart timeframe.
+// - Intraday lookbacks are converted to trading-day-equivalent sample counts.
+// - Intraday percentile history uses a shorter 63-trading-day default so the
+//   engine remains sensitive to the current volatility regime.
+// - Day-equivalent intraday scaling assumes a 390-minute regular session.
+// - Developing mode can change before the active analysis bar closes.
+// - Confirmed mode uses only the last completed analysis bar.
+//
+// STYLE HYGIENE
+// - Internal Screener/Data Window plots remain available to Pine Screener and
+//   alerts but are non-editable so they do not create meaningless Style controls.
+// - User-visible pane plots and reference levels retain meaningful Style controls.
 
 // ============================================================================
 // INPUTS
 // ============================================================================
 
 groupCalc = "Calculation"
-weeklyDataMode = input.string(
-     "Developing Weekly",
-     "Weekly Data Mode",
-     options=["Developing Weekly", "Confirmed Weekly"],
+
+dataMode = input.string(
+     "Developing",
+     "Data Mode",
+     options=["Developing", "Confirmed"],
      group=groupCalc,
-     tooltip="Developing Weekly uses the current in-progress weekly bar and can change before the weekly close. Confirmed Weekly uses only the last completed weekly bar for stable, non-repainting weekly values."
+     tooltip="Developing uses the active analysis bar and can change before that bar closes. Confirmed uses only the last completed analysis bar for stable, non-repainting values."
  )
-useConfirmedWeekly = weeklyDataMode == "Confirmed Weekly"
+
+useConfirmedBar = dataMode == "Confirmed"
 
 wvfLookback = input.int(
      22,
-     "WVF Highest-Close Lookback (weeks)",
+     "WVF Highest-Close Lookback",
      minval=2,
      group=groupCalc,
-     tooltip="Weekly bars used to find the reference highest close for Williams VIX Fix. Because calculations are frozen to 1W, 22 means 22 weeks."
+     tooltip="Daily and higher: number of chart bars used for the Williams VIX Fix highest-close reference. Intraday: interpreted as trading days and converted to analysis bars. With the 130m floor, 22 means about 66 analysis bars."
  )
+
 atrLength = input.int(
      14,
-     "Weekly ATR Length",
+     "ATR Length (analysis bars)",
      minval=1,
      group=groupCalc,
-     tooltip="ATR length used to estimate the symbol's normal weekly movement. ATR is converted to a percent of price before normalization."
+     tooltip="ATR smoothing length in analysis bars on every timeframe. Intraday ATR is deliberately not converted to trading days: keeping the default at 14 analysis bars lets the local volatility estimate respond while the slower 26-day median baseline provides normalization stability."
  )
+
 atrBaselineLength = input.int(
      26,
-     "ATR% Baseline Median (weeks)",
+     "ATR% Baseline Median",
      minval=2,
      group=groupCalc,
-     tooltip="Median lookback used to create a slow weekly ATR% baseline. Median is used so a few unusually large weeks do not inflate the normalization denominator as much as a simple average would."
+     tooltip="Daily and higher: median lookback in chart bars. Intraday: interpreted as trading days and converted to analysis bars. Median reduces distortion from isolated volatility spikes."
  )
+
 percentileLookback = input.int(
      156,
-     "Adaptive Percentile Lookback (weeks)",
+     "Percentile Lookback (D+ bars)",
      minval=20,
      maxval=400,
      group=groupCalc,
-     tooltip="Historical weekly population used to rank normalized stress and stress velocity. 156 weeks is approximately three years and fits comfortably within Pine Screener's 500-bar calculation window."
+     tooltip="Historical population used to rank normalized stress and stress velocity on Daily and higher chart timeframes. On a weekly chart, 156 bars is about three years."
+ )
+
+intradayPercentileDays = input.int(
+     63,
+     "Intraday Percentile History (trading days)",
+     minval=26,
+     maxval=126,
+     group=groupCalc,
+     tooltip="Intraday-only percentile history. 63 trading days is about one quarter: long enough for a stable percentile population while short enough to adapt when the volatility regime changes. At 130m this is about 189 analysis bars; at 195m about 126."
  )
 
 groupSignals = "Signal Thresholds"
+
 longExtremeThreshold = input.float(
      95.0,
      "Long Extreme Stress %ile",
@@ -57,8 +91,9 @@ longExtremeThreshold = input.float(
      maxval=100.0,
      step=0.5,
      group=groupSignals,
-     tooltip="Long-watch threshold. A value of 95 means normalized weekly downside stress is at or above roughly the 95th percentile of this symbol's own historical stress distribution."
+     tooltip="Long-watch threshold. A value of 95 means normalized downside stress is at or above roughly the 95th percentile of this symbol's own historical stress distribution on the active analysis timeframe."
  )
+
 expansionThreshold = input.float(
      95.0,
      "Short Expansion Velocity %ile",
@@ -66,8 +101,9 @@ expansionThreshold = input.float(
      maxval=100.0,
      step=0.5,
      group=groupSignals,
-     tooltip="Short-watch threshold. A value of 95 means the current week-to-week increase in normalized stress ranks near the most rapid historical stress expansions for this symbol."
+     tooltip="Short-watch threshold. A value of 95 means the current analysis-bar increase in normalized stress ranks near the most rapid historical stress expansions for this symbol."
  )
+
 shortStressFloor = input.float(
      50.0,
      "Short Expansion Minimum Stress %ile",
@@ -79,24 +115,28 @@ shortStressFloor = input.float(
  )
 
 groupDisplay = "Display"
+
 showVelocity = input.bool(
      true,
      "Show Velocity %ile",
      group=groupDisplay,
-     tooltip="Shows the adaptive percentile rank of weekly stress velocity in the indicator pane."
+     tooltip="Shows the adaptive percentile rank of stress velocity in the indicator pane."
  )
+
 showSignalMarkers = input.bool(
      true,
      "Show Signal Markers",
      group=groupDisplay,
      tooltip="Shows markers when Short Expansion begins, Long Extreme is first breached, and Long Turn begins."
  )
+
 showDashboard = input.bool(
      true,
      "Show Current-State Table",
      group=groupDisplay,
      tooltip="Shows a compact table for the current symbol. The Pine Screener does not read table cells; screener values come from the first ten plots below."
  )
+
 showStateBackground = input.bool(
      true,
      "Shade Active State",
@@ -111,22 +151,57 @@ shortColor = input.color(color.red, "Short-State Color", group=groupDisplay)
 neutralColor = input.color(color.gray, "Neutral Color", group=groupDisplay)
 
 // ============================================================================
-// WEEKLY CALCULATION ENGINE
+// ADAPTIVE TIMEFRAME AND LOOKBACK ENGINE
 // ============================================================================
 
-f_weeklyMetrics(bool previousWeek) =>
-    float highestClose = ta.highest(close, wvfLookback)
+// 130m is the quality floor for intraday analysis.
+// 26m / 39m / 79m charts therefore read the same 130m stress engine.
+// 130m charts use native 130m calculations.
+// 195m charts use native 195m calculations.
+int intradayFloorSeconds = 130 * 60
+float chartSeconds = timeframe.in_seconds()
+bool useIntradayFloor = timeframe.isintraday and chartSeconds < intradayFloorSeconds
+
+string analysisTimeframe = timeframe.period
+if useIntradayFloor
+    analysisTimeframe := "130"
+
+// Convert the user's day-based intraday settings into a comparable number of
+// analysis bars. The intended U.S. equity workflow uses a 390-minute regular
+// session: 130m = 3 bars/day and 195m = 2 bars/day.
+int intradayBarsPerDay = 1
+if timeframe.isintraday
+    float analysisMinutes = timeframe.in_seconds(analysisTimeframe) / 60.0
+    intradayBarsPerDay := math.max(1, int(math.round(390.0 / analysisMinutes)))
+
+int effectiveWvfLookback = wvfLookback
+int effectiveAtrLength = atrLength
+int effectiveAtrBaselineLength = atrBaselineLength
+int effectivePercentileLookback = percentileLookback
+
+if timeframe.isintraday
+    effectiveWvfLookback := math.max(2, wvfLookback * intradayBarsPerDay)
+    effectiveAtrLength := atrLength
+    effectiveAtrBaselineLength := math.max(2, atrBaselineLength * intradayBarsPerDay)
+    effectivePercentileLookback := math.max(20, intradayPercentileDays * intradayBarsPerDay)
+
+// ============================================================================
+// STRESS CALCULATION ENGINE
+// ============================================================================
+
+f_stressMetrics(bool previousBar) =>
+    float highestClose = ta.highest(close, effectiveWvfLookback)
     float wvf = not na(highestClose) and highestClose != 0.0 ? ((highestClose - low) / highestClose) * 100.0 : na
 
-    float atrValue = ta.atr(atrLength)
+    float atrValue = ta.atr(effectiveAtrLength)
     float atrPercent = not na(close) and close != 0.0 ? (atrValue / close) * 100.0 : na
-    float baselineAtrPercent = ta.median(atrPercent, atrBaselineLength)
+    float baselineAtrPercent = ta.median(atrPercent, effectiveAtrBaselineLength)
 
     float normalizedStress = not na(baselineAtrPercent) and baselineAtrPercent > 0.0 ? wvf / baselineAtrPercent : na
-    float stressPercentile = ta.percentrank(normalizedStress, percentileLookback)
+    float stressPercentile = ta.percentrank(normalizedStress, effectivePercentileLookback)
 
     float stressVelocity = normalizedStress - normalizedStress[1]
-    float velocityPercentile = ta.percentrank(stressVelocity, percentileLookback)
+    float velocityPercentile = ta.percentrank(stressVelocity, effectivePercentileLookback)
 
     bool longExtremeState = not na(stressPercentile) and stressPercentile >= longExtremeThreshold
     bool longTurnState = longExtremeState and not na(stressVelocity) and stressVelocity < 0.0
@@ -138,44 +213,67 @@ f_weeklyMetrics(bool previousWeek) =>
 
     int barsSinceExtreme = ta.barssince(longExtremeEvent)
 
-    float outStressPercentile = previousWeek ? stressPercentile[1] : stressPercentile
-    float outNormalizedStress = previousWeek ? normalizedStress[1] : normalizedStress
-    float outVelocityPercentile = previousWeek ? velocityPercentile[1] : velocityPercentile
-    float outStressVelocity = previousWeek ? stressVelocity[1] : stressVelocity
-    float outWvf = previousWeek ? wvf[1] : wvf
-    float outBaselineAtrPercent = previousWeek ? baselineAtrPercent[1] : baselineAtrPercent
-    bool outLongExtremeState = previousWeek ? longExtremeState[1] : longExtremeState
-    bool outLongTurnState = previousWeek ? longTurnState[1] : longTurnState
-    bool outShortExpansionState = previousWeek ? shortExpansionState[1] : shortExpansionState
-    int outBarsSinceExtreme = previousWeek ? barsSinceExtreme[1] : barsSinceExtreme
-    bool outLongExtremeEvent = previousWeek ? longExtremeEvent[1] : longExtremeEvent
-    bool outLongTurnEvent = previousWeek ? longTurnEvent[1] : longTurnEvent
-    bool outShortExpansionEvent = previousWeek ? shortExpansionEvent[1] : shortExpansionEvent
+    float outStressPercentile = previousBar ? stressPercentile[1] : stressPercentile
+    float outNormalizedStress = previousBar ? normalizedStress[1] : normalizedStress
+    float outVelocityPercentile = previousBar ? velocityPercentile[1] : velocityPercentile
+    float outStressVelocity = previousBar ? stressVelocity[1] : stressVelocity
+    float outWvf = previousBar ? wvf[1] : wvf
+    float outBaselineAtrPercent = previousBar ? baselineAtrPercent[1] : baselineAtrPercent
+
+    bool outLongExtremeState = previousBar ? longExtremeState[1] : longExtremeState
+    bool outLongTurnState = previousBar ? longTurnState[1] : longTurnState
+    bool outShortExpansionState = previousBar ? shortExpansionState[1] : shortExpansionState
+    int outBarsSinceExtreme = previousBar ? barsSinceExtreme[1] : barsSinceExtreme
+
+    bool outLongExtremeEvent = previousBar ? longExtremeEvent[1] : longExtremeEvent
+    bool outLongTurnEvent = previousBar ? longTurnEvent[1] : longTurnEvent
+    bool outShortExpansionEvent = previousBar ? shortExpansionEvent[1] : shortExpansionEvent
 
     [outStressPercentile, outNormalizedStress, outVelocityPercentile, outStressVelocity, outWvf, outBaselineAtrPercent, outLongExtremeState, outLongTurnState, outShortExpansionState, outBarsSinceExtreme, outLongExtremeEvent, outLongTurnEvent, outShortExpansionEvent]
 
-[devStressPercentile, devNormalizedStress, devVelocityPercentile, devStressVelocity, devWvf, devBaselineAtrPercent, devLongExtremeState, devLongTurnState, devShortExpansionState, devBarsSinceExtreme, devLongExtremeEvent, devLongTurnEvent, devShortExpansionEvent] = request.security(syminfo.tickerid, "1W", f_weeklyMetrics(false), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
-[confStressPercentile, confNormalizedStress, confVelocityPercentile, confStressVelocity, confWvf, confBaselineAtrPercent, confLongExtremeState, confLongTurnState, confShortExpansionState, confBarsSinceExtreme, confLongExtremeEventRaw, confLongTurnEventRaw, confShortExpansionEventRaw] = request.security(syminfo.tickerid, "1W", f_weeklyMetrics(true), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+[devStressPercentile, devNormalizedStress, devVelocityPercentile, devStressVelocity, devWvf, devBaselineAtrPercent, devLongExtremeState, devLongTurnState, devShortExpansionState, devBarsSinceExtreme, devLongExtremeEvent, devLongTurnEvent, devShortExpansionEvent] = request.security(
+     syminfo.tickerid,
+     analysisTimeframe,
+     f_stressMetrics(false),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+ )
 
-float stressPercentile = useConfirmedWeekly ? confStressPercentile : devStressPercentile
-float normalizedStress = useConfirmedWeekly ? confNormalizedStress : devNormalizedStress
-float velocityPercentile = useConfirmedWeekly ? confVelocityPercentile : devVelocityPercentile
-float stressVelocity = useConfirmedWeekly ? confStressVelocity : devStressVelocity
-float wvf = useConfirmedWeekly ? confWvf : devWvf
-float baselineAtrPercent = useConfirmedWeekly ? confBaselineAtrPercent : devBaselineAtrPercent
-bool longExtremeState = useConfirmedWeekly ? confLongExtremeState : devLongExtremeState
-bool longTurnState = useConfirmedWeekly ? confLongTurnState : devLongTurnState
-bool shortExpansionState = useConfirmedWeekly ? confShortExpansionState : devShortExpansionState
-int barsSinceExtreme = useConfirmedWeekly ? confBarsSinceExtreme : devBarsSinceExtreme
+[confStressPercentile, confNormalizedStress, confVelocityPercentile, confStressVelocity, confWvf, confBaselineAtrPercent, confLongExtremeState, confLongTurnState, confShortExpansionState, confBarsSinceExtreme, confLongExtremeEventRaw, confLongTurnEventRaw, confShortExpansionEventRaw] = request.security(
+     syminfo.tickerid,
+     analysisTimeframe,
+     f_stressMetrics(true),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_on
+ )
 
-bool newWeeklyPeriod = timeframe.change("1W")
-bool longExtremeEvent = useConfirmedWeekly ? confLongExtremeEventRaw and newWeeklyPeriod : devLongExtremeEvent
-bool longTurnEvent = useConfirmedWeekly ? confLongTurnEventRaw and newWeeklyPeriod : devLongTurnEvent
-bool shortExpansionEvent = useConfirmedWeekly ? confShortExpansionEventRaw and newWeeklyPeriod : devShortExpansionEvent
+float stressPercentile = useConfirmedBar ? confStressPercentile : devStressPercentile
+float normalizedStress = useConfirmedBar ? confNormalizedStress : devNormalizedStress
+float velocityPercentile = useConfirmedBar ? confVelocityPercentile : devVelocityPercentile
+float stressVelocity = useConfirmedBar ? confStressVelocity : devStressVelocity
+float wvf = useConfirmedBar ? confWvf : devWvf
+float baselineAtrPercent = useConfirmedBar ? confBaselineAtrPercent : devBaselineAtrPercent
+
+bool longExtremeState = useConfirmedBar ? confLongExtremeState : devLongExtremeState
+bool longTurnState = useConfirmedBar ? confLongTurnState : devLongTurnState
+bool shortExpansionState = useConfirmedBar ? confShortExpansionState : devShortExpansionState
+int barsSinceExtreme = useConfirmedBar ? confBarsSinceExtreme : devBarsSinceExtreme
+
+bool newAnalysisPeriod = timeframe.change(analysisTimeframe)
+
+bool longExtremeEvent = devLongExtremeEvent
+bool longTurnEvent = devLongTurnEvent
+bool shortExpansionEvent = devShortExpansionEvent
+
+if useConfirmedBar
+    longExtremeEvent := confLongExtremeEventRaw and newAnalysisPeriod
+    longTurnEvent := confLongTurnEventRaw and newAnalysisPeriod
+    shortExpansionEvent := confShortExpansionEventRaw and newAnalysisPeriod
 
 // ============================================================================
 // FIRST 10 PLOTS = PINE SCREENER COLUMNS
-// Keep these first and in this order. Pine Screener exposes the first ten plots.
+// Keep these first and in this order. Internal/output-only plots are non-editable
+// so they remain available to Screener/Data Window without cluttering Style.
 // ============================================================================
 
 plot(
@@ -185,67 +283,85 @@ plot(
      linewidth=2,
      display=display.pane + display.data_window + display.pine_screener
  )
+
 plot(
      normalizedStress,
      "Normalized Stress",
      color=stressColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      velocityPercentile,
      "Velocity %ile",
      color=velocityColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      stressVelocity,
      "Stress Velocity",
      color=velocityColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      wvf,
      "WVF",
      color=neutralColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      baselineAtrPercent,
      "Baseline ATR %",
      color=neutralColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      longExtremeState ? 1.0 : 0.0,
      "Long Extreme",
      color=longColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      longTurnState ? 1.0 : 0.0,
      "Long Turn",
      color=longColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      shortExpansionState ? 1.0 : 0.0,
      "Short Expansion",
      color=shortColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
+
 plot(
      barsSinceExtreme,
      "Bars Since Extreme",
      color=neutralColor,
-     display=display.data_window + display.pine_screener
+     display=display.data_window + display.pine_screener,
+     editable=false
  )
 
 // ============================================================================
 // CHART REFERENCE LEVELS AND SIGNAL DISPLAY
 // ============================================================================
 
-// Visible velocity line is deliberately separate from the first ten screener plots
-// so the Show Velocity control cannot blank the Pine Screener column.
+// Visible velocity line is deliberately separate from the first ten Screener
+// plots so Show Velocity cannot blank the Pine Screener column.
 plot(
      showVelocity ? velocityPercentile : na,
      "Velocity %ile - Chart",
@@ -267,6 +383,7 @@ plotshape(
      size=size.tiny,
      text="S"
  )
+
 plotshape(
      showSignalMarkers and longExtremeEvent,
      title="Long Extreme Marker",
@@ -276,6 +393,7 @@ plotshape(
      size=size.tiny,
      text="X"
  )
+
 plotshape(
      showSignalMarkers and longTurnEvent,
      title="Long Turn Marker",
@@ -295,7 +413,7 @@ if showStateBackground
     else if shortExpansionState
         stateBackground := color.new(shortColor, 91)
 
-bgcolor(stateBackground, title="Adaptive Stress State")
+bgcolor(stateBackground, title="Adaptive Stress State", editable=false)
 
 // ============================================================================
 // CURRENT-SYMBOL DASHBOARD
@@ -303,6 +421,7 @@ bgcolor(stateBackground, title="Adaptive Stress State")
 
 string stateText = "NEUTRAL"
 color stateColor = neutralColor
+
 if longTurnState
     stateText := "LONG TURN"
     stateColor := longColor
@@ -313,12 +432,25 @@ else if shortExpansionState
     stateText := "SHORT EXPANSION"
     stateColor := shortColor
 
+string analysisLabel = analysisTimeframe
+if analysisTimeframe == "130"
+    analysisLabel := "130m"
+else if analysisTimeframe == "195"
+    analysisLabel := "195m"
+
+string modeLabel = " DEV"
+if useConfirmedBar
+    modeLabel := " CONF"
+
+if useIntradayFloor
+    analysisLabel := analysisLabel + " FLOOR"
+
 var table dashboard = table.new(position.top_right, 2, 9, border_width=1)
 
 if barstate.islast
     if showDashboard
-        table.cell(dashboard, 0, 0, "Adaptive Weekly Stress", text_color=color.white, bgcolor=color.new(neutralColor, 55))
-        table.cell(dashboard, 1, 0, useConfirmedWeekly ? "1W CONF" : "1W DEV", text_color=color.white, bgcolor=color.new(neutralColor, 55))
+        table.cell(dashboard, 0, 0, "Adaptive Stress", text_color=color.white, bgcolor=color.new(neutralColor, 55))
+        table.cell(dashboard, 1, 0, analysisLabel + modeLabel, text_color=color.white, bgcolor=color.new(neutralColor, 55))
 
         table.cell(dashboard, 0, 1, "Stress %ile")
         table.cell(dashboard, 1, 1, str.tostring(stressPercentile, "#.##"))
@@ -348,22 +480,23 @@ if barstate.islast
 
 // ============================================================================
 // ALERTS
+// Existing alert names are unchanged.
 // ============================================================================
 
 alertcondition(
      shortExpansionEvent,
      title="Adaptive Stress Expansion",
-     message="Adaptive Stress Expansion on {{ticker}}: weekly normalized stress has begun expanding at a historically unusual rate. Stress %ile={{plot(\"Stress %ile\")}}, Velocity %ile={{plot(\"Velocity %ile\")}}."
+     message="Adaptive Stress Expansion on {{ticker}}: analysis-timeframe normalized stress has begun expanding at a historically unusual rate. Stress %ile={{plot(\"Stress %ile\")}}, Velocity %ile={{plot(\"Velocity %ile\")}}."
  )
 
 alertcondition(
      longExtremeEvent,
      title="Adaptive Stress Extreme",
-     message="Adaptive Stress Extreme on {{ticker}}: weekly normalized stress has crossed the configured extreme percentile threshold. Stress %ile={{plot(\"Stress %ile\")}}, Normalized Stress={{plot(\"Normalized Stress\")}}."
+     message="Adaptive Stress Extreme on {{ticker}}: analysis-timeframe normalized stress has crossed the configured extreme percentile threshold. Stress %ile={{plot(\"Stress %ile\")}}, Normalized Stress={{plot(\"Normalized Stress\")}}."
  )
 
 alertcondition(
      longTurnEvent,
      title="Adaptive Stress Turn",
-     message="Adaptive Stress Turn on {{ticker}}: weekly stress remains extreme and its week-to-week velocity has turned negative. Stress %ile={{plot(\"Stress %ile\")}}, Stress Velocity={{plot(\"Stress Velocity\")}}."
+     message="Adaptive Stress Turn on {{ticker}}: stress remains extreme and its analysis-bar velocity has turned negative. Stress %ile={{plot(\"Stress %ile\")}}, Stress Velocity={{plot(\"Stress Velocity\")}}."
  )
