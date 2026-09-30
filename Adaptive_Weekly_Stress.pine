@@ -2,7 +2,7 @@
 
 indicator("Adaptive Weekly Stress", shorttitle="AWS", overlay=false)
 
-// Revision: 1.03
+// Revision: 1.04
 // Symbol-agnostic stress engine for chart display, Pine Screener columns,
 // and watchlist alerts.
 //
@@ -114,6 +114,72 @@ shortStressFloor = input.float(
      tooltip="Minimum stress percentile required before the rapid-expansion state can qualify as a Short Expansion signal. The default 50 requires stress to be above its own historical median before a velocity spike can signal."
  )
 
+groupQuantAlerts = "Quantitative Stress Alerts"
+
+stressLevelThreshold = input.float(
+     80.0,
+     "Stress %ile Level Threshold",
+     minval=0.0,
+     maxval=100.0,
+     step=0.5,
+     group=groupQuantAlerts,
+     tooltip="Numeric Stress %ile threshold used by the Stress %ile Level alert. The separate Level Condition setting controls whether the alert watches for an upward or downward threshold event."
+ )
+
+stressLevelCondition = input.string(
+     "Cross Above",
+     "Stress %ile Level Condition",
+     options=["Cross Above", "Cross Below", "At/Above", "At/Below"],
+     group=groupQuantAlerts,
+     tooltip="Cross Above/Below requires a threshold crossing. At/Above or At/Below fires when that state first becomes true, rather than repeating on every bar while the state remains true."
+ )
+
+stressChangeBars = input.int(
+     2,
+     "Stress %ile Change Bars",
+     minval=1,
+     maxval=20,
+     group=groupQuantAlerts,
+     tooltip="Number of analysis bars used for Stress %ile Change. Change = current Stress %ile minus Stress %ile this many analysis bars ago. On 26m/39m/79m charts these are 130m analysis bars because of the quality floor."
+ )
+
+stressRisePoints = input.float(
+     15.0,
+     "Stress %ile Rise (points)",
+     minval=0.5,
+     maxval=100.0,
+     step=0.5,
+     group=groupQuantAlerts,
+     tooltip="Stress %ile Rise alert threshold in percentile points over the configured Change Bars. Example: 55 to 72 is a +17 point rise."
+ )
+
+stressDropPoints = input.float(
+     15.0,
+     "Stress %ile Drop (points)",
+     minval=0.5,
+     maxval=100.0,
+     step=0.5,
+     group=groupQuantAlerts,
+     tooltip="Stress %ile Drop alert threshold in percentile points over the configured Change Bars. Example: 92 to 70 is a 22 point drop."
+ )
+
+useStressMoveLevelQualifier = input.bool(
+     false,
+     "Qualify Rise/Drop by Absolute Stress",
+     group=groupQuantAlerts,
+     tooltip="When enabled, Rise requires the current Stress %ile to be at or above the qualifier. Drop requires Stress %ile at the START of the measured move to be at or above the qualifier. This avoids treating a large move from an unimportant stress level the same as a move involving elevated stress."
+ )
+
+stressMoveLevelQualifier = input.float(
+     75.0,
+     "Rise/Drop Stress %ile Qualifier",
+     minval=0.0,
+     maxval=100.0,
+     step=0.5,
+     group=groupQuantAlerts,
+     tooltip="Absolute Stress %ile used only when Qualify Rise/Drop by Absolute Stress is enabled. Rise qualifies on the current Stress %ile; Drop qualifies on the Stress %ile from Change Bars ago."
+ )
+
 groupDisplay = "Display"
 
 showVelocity = input.bool(
@@ -203,6 +269,29 @@ f_stressMetrics(bool previousBar) =>
     float stressVelocity = normalizedStress - normalizedStress[1]
     float velocityPercentile = ta.percentrank(stressVelocity, effectivePercentileLookback)
 
+    float stressPercentileChange = stressPercentile - stressPercentile[stressChangeBars]
+
+    bool stressLevelAtOrAbove = not na(stressPercentile) and stressPercentile >= stressLevelThreshold
+    bool stressLevelAtOrBelow = not na(stressPercentile) and stressPercentile <= stressLevelThreshold
+    bool stressLevelCrossAbove = ta.crossover(stressPercentile, stressLevelThreshold)
+    bool stressLevelCrossBelow = ta.crossunder(stressPercentile, stressLevelThreshold)
+    bool stressLevelEvent = false
+    if stressLevelCondition == "Cross Above"
+        stressLevelEvent := stressLevelCrossAbove
+    else if stressLevelCondition == "Cross Below"
+        stressLevelEvent := stressLevelCrossBelow
+    else if stressLevelCondition == "At/Above"
+        stressLevelEvent := stressLevelAtOrAbove and not stressLevelAtOrAbove[1]
+    else
+        stressLevelEvent := stressLevelAtOrBelow and not stressLevelAtOrBelow[1]
+
+    bool stressRiseQualified = not useStressMoveLevelQualifier or stressPercentile >= stressMoveLevelQualifier
+    bool stressDropQualified = not useStressMoveLevelQualifier or stressPercentile[stressChangeBars] >= stressMoveLevelQualifier
+    bool stressRiseState = not na(stressPercentileChange) and stressPercentileChange >= stressRisePoints and stressRiseQualified
+    bool stressDropState = not na(stressPercentileChange) and stressPercentileChange <= -stressDropPoints and stressDropQualified
+    bool stressRiseEvent = stressRiseState and not stressRiseState[1]
+    bool stressDropEvent = stressDropState and not stressDropState[1]
+
     bool longExtremeState = not na(stressPercentile) and stressPercentile >= longExtremeThreshold
     bool longTurnState = longExtremeState and not na(stressVelocity) and stressVelocity < 0.0
     bool shortExpansionState = not na(velocityPercentile) and stressPercentile >= shortStressFloor and stressPercentile < longExtremeThreshold and stressVelocity > 0.0 and velocityPercentile >= expansionThreshold
@@ -219,6 +308,7 @@ f_stressMetrics(bool previousBar) =>
     float outStressVelocity = previousBar ? stressVelocity[1] : stressVelocity
     float outWvf = previousBar ? wvf[1] : wvf
     float outBaselineAtrPercent = previousBar ? baselineAtrPercent[1] : baselineAtrPercent
+    float outStressPercentileChange = previousBar ? stressPercentileChange[1] : stressPercentileChange
 
     bool outLongExtremeState = previousBar ? longExtremeState[1] : longExtremeState
     bool outLongTurnState = previousBar ? longTurnState[1] : longTurnState
@@ -228,10 +318,13 @@ f_stressMetrics(bool previousBar) =>
     bool outLongExtremeEvent = previousBar ? longExtremeEvent[1] : longExtremeEvent
     bool outLongTurnEvent = previousBar ? longTurnEvent[1] : longTurnEvent
     bool outShortExpansionEvent = previousBar ? shortExpansionEvent[1] : shortExpansionEvent
+    bool outStressLevelEvent = previousBar ? stressLevelEvent[1] : stressLevelEvent
+    bool outStressRiseEvent = previousBar ? stressRiseEvent[1] : stressRiseEvent
+    bool outStressDropEvent = previousBar ? stressDropEvent[1] : stressDropEvent
 
-    [outStressPercentile, outNormalizedStress, outVelocityPercentile, outStressVelocity, outWvf, outBaselineAtrPercent, outLongExtremeState, outLongTurnState, outShortExpansionState, outBarsSinceExtreme, outLongExtremeEvent, outLongTurnEvent, outShortExpansionEvent]
+    [outStressPercentile, outNormalizedStress, outVelocityPercentile, outStressVelocity, outWvf, outBaselineAtrPercent, outStressPercentileChange, outLongExtremeState, outLongTurnState, outShortExpansionState, outBarsSinceExtreme, outLongExtremeEvent, outLongTurnEvent, outShortExpansionEvent, outStressLevelEvent, outStressRiseEvent, outStressDropEvent]
 
-[devStressPercentile, devNormalizedStress, devVelocityPercentile, devStressVelocity, devWvf, devBaselineAtrPercent, devLongExtremeState, devLongTurnState, devShortExpansionState, devBarsSinceExtreme, devLongExtremeEvent, devLongTurnEvent, devShortExpansionEvent] = request.security(
+[devStressPercentile, devNormalizedStress, devVelocityPercentile, devStressVelocity, devWvf, devBaselineAtrPercent, devStressPercentileChange, devLongExtremeState, devLongTurnState, devShortExpansionState, devBarsSinceExtreme, devLongExtremeEvent, devLongTurnEvent, devShortExpansionEvent, devStressLevelEvent, devStressRiseEvent, devStressDropEvent] = request.security(
      syminfo.tickerid,
      analysisTimeframe,
      f_stressMetrics(false),
@@ -239,7 +332,7 @@ f_stressMetrics(bool previousBar) =>
      lookahead=barmerge.lookahead_off
  )
 
-[confStressPercentile, confNormalizedStress, confVelocityPercentile, confStressVelocity, confWvf, confBaselineAtrPercent, confLongExtremeState, confLongTurnState, confShortExpansionState, confBarsSinceExtreme, confLongExtremeEventRaw, confLongTurnEventRaw, confShortExpansionEventRaw] = request.security(
+[confStressPercentile, confNormalizedStress, confVelocityPercentile, confStressVelocity, confWvf, confBaselineAtrPercent, confStressPercentileChange, confLongExtremeState, confLongTurnState, confShortExpansionState, confBarsSinceExtreme, confLongExtremeEventRaw, confLongTurnEventRaw, confShortExpansionEventRaw, confStressLevelEventRaw, confStressRiseEventRaw, confStressDropEventRaw] = request.security(
      syminfo.tickerid,
      analysisTimeframe,
      f_stressMetrics(true),
@@ -253,6 +346,7 @@ float velocityPercentile = useConfirmedBar ? confVelocityPercentile : devVelocit
 float stressVelocity = useConfirmedBar ? confStressVelocity : devStressVelocity
 float wvf = useConfirmedBar ? confWvf : devWvf
 float baselineAtrPercent = useConfirmedBar ? confBaselineAtrPercent : devBaselineAtrPercent
+float stressPercentileChange = useConfirmedBar ? confStressPercentileChange : devStressPercentileChange
 
 bool longExtremeState = useConfirmedBar ? confLongExtremeState : devLongExtremeState
 bool longTurnState = useConfirmedBar ? confLongTurnState : devLongTurnState
@@ -264,11 +358,17 @@ bool newAnalysisPeriod = timeframe.change(analysisTimeframe)
 bool longExtremeEvent = devLongExtremeEvent
 bool longTurnEvent = devLongTurnEvent
 bool shortExpansionEvent = devShortExpansionEvent
+bool stressLevelEvent = devStressLevelEvent
+bool stressRiseEvent = devStressRiseEvent
+bool stressDropEvent = devStressDropEvent
 
 if useConfirmedBar
     longExtremeEvent := confLongExtremeEventRaw and newAnalysisPeriod
     longTurnEvent := confLongTurnEventRaw and newAnalysisPeriod
     shortExpansionEvent := confShortExpansionEventRaw and newAnalysisPeriod
+    stressLevelEvent := confStressLevelEventRaw and newAnalysisPeriod
+    stressRiseEvent := confStressRiseEventRaw and newAnalysisPeriod
+    stressDropEvent := confStressDropEventRaw and newAnalysisPeriod
 
 // ============================================================================
 // FIRST 10 PLOTS = PINE SCREENER COLUMNS
@@ -353,6 +453,16 @@ plot(
      "Bars Since Extreme",
      color=neutralColor,
      display=display.data_window + display.pine_screener,
+     editable=false
+ )
+
+// Quantitative alert/output helper. This is intentionally after the first ten
+// plots so it does not displace an existing Pine Screener column.
+plot(
+     stressPercentileChange,
+     "Stress %ile Change",
+     color=neutralColor,
+     display=display.data_window,
      editable=false
  )
 
@@ -445,7 +555,7 @@ if useConfirmedBar
 if useIntradayFloor
     analysisLabel := analysisLabel + " FLOOR"
 
-var table dashboard = table.new(position.top_right, 2, 9, border_width=1)
+var table dashboard = table.new(position.top_right, 2, 10, border_width=1)
 
 if barstate.islast
     if showDashboard
@@ -461,26 +571,29 @@ if barstate.islast
         table.cell(dashboard, 0, 3, "Velocity %ile")
         table.cell(dashboard, 1, 3, str.tostring(velocityPercentile, "#.##"))
 
-        table.cell(dashboard, 0, 4, "Stress Velocity")
-        table.cell(dashboard, 1, 4, str.tostring(stressVelocity, "#.###"))
+        table.cell(dashboard, 0, 4, "Stress %ile Change (" + str.tostring(stressChangeBars) + ")")
+        table.cell(dashboard, 1, 4, str.tostring(stressPercentileChange, "#.##"))
 
-        table.cell(dashboard, 0, 5, "WVF")
-        table.cell(dashboard, 1, 5, str.tostring(wvf, "#.##"))
+        table.cell(dashboard, 0, 5, "Stress Velocity")
+        table.cell(dashboard, 1, 5, str.tostring(stressVelocity, "#.###"))
 
-        table.cell(dashboard, 0, 6, "Baseline ATR %")
-        table.cell(dashboard, 1, 6, str.tostring(baselineAtrPercent, "#.##"))
+        table.cell(dashboard, 0, 6, "WVF")
+        table.cell(dashboard, 1, 6, str.tostring(wvf, "#.##"))
 
-        table.cell(dashboard, 0, 7, "Bars Since Extreme")
-        table.cell(dashboard, 1, 7, str.tostring(barsSinceExtreme))
+        table.cell(dashboard, 0, 7, "Baseline ATR %")
+        table.cell(dashboard, 1, 7, str.tostring(baselineAtrPercent, "#.##"))
 
-        table.cell(dashboard, 0, 8, "State")
-        table.cell(dashboard, 1, 8, stateText, text_color=stateColor)
+        table.cell(dashboard, 0, 8, "Bars Since Extreme")
+        table.cell(dashboard, 1, 8, str.tostring(barsSinceExtreme))
+
+        table.cell(dashboard, 0, 9, "State")
+        table.cell(dashboard, 1, 9, stateText, text_color=stateColor)
     else
-        table.clear(dashboard, 0, 0, 1, 8)
+        table.clear(dashboard, 0, 0, 1, 9)
 
 // ============================================================================
 // ALERTS
-// Existing alert names are unchanged.
+// Existing alert names are unchanged. Three quantitative alerts are added.
 // ============================================================================
 
 alertcondition(
@@ -499,4 +612,22 @@ alertcondition(
      longTurnEvent,
      title="Adaptive Stress Turn",
      message="Adaptive Stress Turn on {{ticker}}: stress remains extreme and its analysis-bar velocity has turned negative. Stress %ile={{plot(\"Stress %ile\")}}, Stress Velocity={{plot(\"Stress Velocity\")}}."
+ )
+
+alertcondition(
+     stressLevelEvent,
+     title="Stress %ile Level",
+     message="Stress %ile Level on {{ticker}}: the configured numeric Stress %ile level condition has triggered. Stress %ile={{plot(\"Stress %ile\")}}, Stress %ile Change={{plot(\"Stress %ile Change\")}}."
+ )
+
+alertcondition(
+     stressRiseEvent,
+     title="Stress %ile Rise",
+     message="Stress %ile Rise on {{ticker}}: Stress %ile has risen by at least the configured number of percentile points over the configured analysis-bar window. Stress %ile={{plot(\"Stress %ile\")}}, Stress %ile Change={{plot(\"Stress %ile Change\")}}."
+ )
+
+alertcondition(
+     stressDropEvent,
+     title="Stress %ile Drop",
+     message="Stress %ile Drop on {{ticker}}: Stress %ile has dropped by at least the configured number of percentile points over the configured analysis-bar window. Stress %ile={{plot(\"Stress %ile\")}}, Stress %ile Change={{plot(\"Stress %ile Change\")}}."
  )

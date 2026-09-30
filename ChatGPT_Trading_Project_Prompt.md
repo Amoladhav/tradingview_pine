@@ -1,95 +1,121 @@
-Treat this Pine Script as a Git-managed source file.
+# Pine Script Development Rules
 
-## Source-of-truth rules
+Treat every Pine Script as a **Git-managed source file**. Make the smallest safe change necessary and preserve existing behavior unless the request explicitly changes it.
 
-1. The supplied `.pine` file is the current source of truth.
-2. Keep the same canonical filename unless I explicitly request a rename.
-3. Do NOT create filenames such as `_v2`, `_v3`, `_final`, `_fixed`, etc.
-4. Git history, not filenames, will track versions.
-5. Never reconstruct older portions of the script from memory when the current source is available.
-6. Preserve existing behavior unless the requested change explicitly modifies it.
+## Source of Truth
 
-## For every iteration
+* The supplied `.pine` file is always the current source of truth.
+* Never reconstruct existing code from memory when the source file is available.
+* Preserve the canonical filename unless I explicitly request a rename.
+* Replace spaces in filenames with `_`.
+* Never create versioned filenames such as `_v2`, `_final`, `_fixed`, etc. Git tracks versions.
+* If the script contains an internal revision comment such as `// Revision: 1.12`, increment it only when code changes.
 
-Make only the requested changes and avoid unrelated refactoring.
+## Before Editing
 
-Before modifying code:
+Identify:
 
-* identify the affected logic;
-* distinguish calculation changes from display-only changes;
-* identify any impact on alerts, timeframe behavior, plots, settings, or historical behavior.
+* affected logic;
+* whether the change is **calculation**, **display**, **alert**, **settings**, or **timeframe** related;
+* any effect on historical behavior, repaint/lookahead behavior, alerts, plots, inputs, or frozen-timeframe behavior.
 
-For Pine Script:
+Do not perform unrelated refactoring.
 
-* perform the full compile-safety/static syntax pass required by this project;
-* prefer explicit compiler-safe Pine syntax over compact syntax;
-* do not introduce multiline chained ternaries or fragile multiline statements;
-* preserve working `request.security()` and timeframe behavior unless specifically changing them;
-* do not silently change repaint/lookahead behavior.
+## Pine Safety
+
+* Perform a full static Pine compile-safety/syntax review.
+* Prefer explicit, compiler-safe syntax.
+* Avoid fragile multiline expressions and multiline chained ternaries.
+* Preserve working `request.security()` logic and timeframe behavior unless specifically requested.
+* Never silently alter repaint, confirmation, or lookahead behavior.
 
 ## Alerts
 
-Do not rename, remove, combine, or add alerts without calling it out.
+Existing alerts are part of the script contract.
 
-If a new alert is required, propose the exact alert name and meaning for my validation before treating the implementation as final.
+* Do not rename, remove, combine, or alter existing alert conditions unless explicitly requested.
+* Do not add alerts silently.
+* If a new alert is needed, state its **exact proposed name and meaning** for validation before treating it as final.
+* Preserve numerical alert outputs needed for TradingView user-defined thresholds.
 
-Existing alert names and conditions should remain unchanged unless explicitly requested.
+## Settings & Timeframes
 
-## Settings
+Preserve existing:
 
-Preserve:
-
-* existing inputs and defaults;
+* inputs and defaults;
 * show/hide controls;
-* line/text formatting controls;
+* formatting controls;
+* colors, widths, styles, and text controls;
 * timeframe controls;
 * frozen-timeframe behavior.
 
-If the requested feature cannot function correctly with a frozen timeframe, explicitly state that.
+If a requested feature cannot work correctly with a frozen timeframe, explicitly state that.
 
-Tooltips/pop-up comments should remain concise but sufficiently descriptive to make the correct setting choice.
+Tooltips should be concise but sufficient for choosing the correct setting.
 
-## Deliverables after each change
+## Style-Tab Hygiene
 
-Return:
+Expose only controls with meaningful visible effects.
+
+Classify every plot/shape/line/background as:
+
+1. **User-visible**
+2. **Optional visible**
+3. **Internal/output-only**
+
+Only the first two should normally expose Style controls.
+
+For plots used only for alerts, calculations, screeners, Data Window values, or plumbing:
+
+* use `editable=false` where supported;
+* use `display` independently to control where the value appears.
+
+Remember: `display` controls visibility/location; `editable` controls Style-tab customization.
+
+Do not remove useful Inputs merely to reduce clutter. If appearance is already intentionally controlled through Inputs, suppress redundant automatic Style controls where appropriate.
+
+## Change Discipline
+
+For every iteration:
+
+* modify only what was requested;
+* preserve unrelated calculations and behavior;
+* preserve existing alerts and settings;
+* preserve timeframe semantics;
+* preserve historical/repaint behavior unless explicitly changing it.
+
+## Required Deliverables
+
+After every code change, return:
 
 1. **Full updated `.pine` file** using the canonical filename.
-
 2. **Change summary** — only what changed.
+3. **Behavior impact** covering:
 
-3. **Behavior impact** — calculation / display / alert / timeframe.
-
-4. **Git commit message** in this format:
+   * Calculation
+   * Display
+   * Alerts
+   * Timeframe
+4. **Git commit message**:
 
    `type(scope): concise description`
 
-   Prefer:
+   Preferred types:
 
-   * `feat` for new functionality
-   * `fix` for a correction
-   * `refactor` for structural change without behavior change
-   * `style` for display-only changes
-   * `docs` for documentation/comments
-   * `chore` for maintenance
+   * `feat` — new functionality
+   * `fix` — correction
+   * `refactor` — structural change without behavior change
+   * `style` — display-only change
+   * `docs` — comments/documentation
+   * `chore` — maintenance
+5. **Suggested Git diff summary**, e.g.
+   `1 file changed, 14 insertions(+), 3 deletions(-)`
+6. Compilation status.
 
-5. **Suggested Git diff summary**, for example:
-   `2 files changed, 14 insertions(+), 3 deletions(-)`
+If TradingView's actual compiler was not used, state exactly:
 
-6. Mention whether TradingView compilation was actually performed. If TradingView's compiler is unavailable, state:
-   `Static Pine compile-safety pass completed; TradingView compiler not available in this environment.`
+`Static Pine compile-safety pass completed; TradingView compiler not available in this environment.`
 
-## Versioning
+## Default Principle
 
-Do not put iteration numbers in the filename.
-
-If an internal script version is useful, maintain it in a short header comment such as:
-
-`// Revision: 1.12`
-
-Only increment that revision when code is actually changed.
-
-## Current requested change
-
-[Describe the requested change here.]
-
-Make the smallest safe change necessary.
+**Preserve behavior, minimize the diff, keep the UI meaningful, and make every modification auditable through Git.**
