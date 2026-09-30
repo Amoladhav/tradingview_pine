@@ -1,6 +1,6 @@
 //@version=6
 
-// Revision: 2.7
+// Revision: 2.8
 
 indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false, max_boxes_count=500)
 
@@ -158,13 +158,16 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 
 // Base Formation: true when the confirmed orange Resistant Response dot appears.
 
+// Body Efficiency Cross Up: true when confirmed Signed Body Efficiency crosses upward through 0.
+
+// Body Efficiency Cross Down: true when confirmed Signed Body Efficiency crosses downward through 0.
+
 // Price Response Numerical: raw Directional Response series exposed for numeric alerts.
 
 // Signed Body Efficiency Numerical: raw signed candle-body efficiency exposed for numeric alerts.
 
-// Both numerical series remain independent of the named Boolean dot alerts.
-
-// Boolean alerts require no alert-dialog threshold. Numeric alerts intentionally do.
+// Both numerical series remain independent of the named Boolean alerts and accept user-selected
+// alert operators / values directly in TradingView.
 
 // DISPLAY / ALERT CONFIRMATION
 
@@ -626,6 +629,12 @@ else
 
 bool ready = activePopSize >= effectiveLookback
 
+// Raw numerical alert/filter sources. Keep these early in plot order so TradingView alert
+// and Pine Screener interfaces can expose them prominently. They do not depend on show/hide
+// display controls and therefore remain available even when their visual plots are hidden.
+plot(directionalResponse, title="Price Response Numerical", display=display.data_window)
+plot(bodyEfficiency, title="Signed Body Efficiency Numerical", display=display.data_window)
+
 bool confirmedObservation = barstate.isconfirmed
 
 // Display the current realtime bar as it develops; signals/alerts below still require confirmation.
@@ -722,6 +731,15 @@ bool efficientDrop = ready and confirmedObservation and not na(directionalRespon
 
 bool momentumEitherSide = efficientRally or efficientDrop
 
+// Signed Body Efficiency zero-cross alerts are intentionally independent of Price Response.
+// Evaluate cross functions on every calculation, then gate the alert state to confirmed bars.
+// Cross Up: prior value <= 0 and confirmed current value > 0.
+// Cross Down: prior value >= 0 and confirmed current value < 0.
+bool bodyEfficiencyCrossUpRaw = ta.crossover(bodyEfficiency, 0.0)
+bool bodyEfficiencyCrossDownRaw = ta.crossunder(bodyEfficiency, 0.0)
+bool bodyEfficiencyCrossUp = confirmedObservation and bodyEfficiencyCrossUpRaw
+bool bodyEfficiencyCrossDown = confirmedObservation and bodyEfficiencyCrossDownRaw
+
 float redDotY = -highDirectionalThreshold - redDotOffset
 
 float orangeDotY = redDotY - orangeDotSpacing
@@ -734,9 +752,9 @@ plotshape(efficientDrop ? redDotY : na, title="Efficient Drop Response Marker", 
 
 // ── Alerts.
 
-// These Boolean conditions exactly mirror the confirmed colored-dot states above.
-
-// No numeric value is required in TradingView for these four named conditions.
+// Colored-dot Boolean conditions remain unchanged. The two Body Efficiency cross alerts use
+// a fixed zero level and fire only on confirmed bars. The raw Signed Body Efficiency Numerical
+// plot above remains available separately for user-selected operators and numeric thresholds.
 
 alertcondition(efficientRally, title="Bullish Momentum", message="Bullish Momentum | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
@@ -745,6 +763,10 @@ alertcondition(efficientDrop, title="Bearish Momentum", message="Bearish Momentu
 alertcondition(momentumEitherSide, title="Momentum Either side", message="Momentum Either side | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
 alertcondition(resistantResponse, title="Base Formation", message="Base Formation | {{ticker}} | {{interval}} | Neutral Response={{plot(\"Neutral Price Response Data\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
+
+alertcondition(bodyEfficiencyCrossUp, title="Body Efficiency Cross Up", message="Body Efficiency Cross Up | {{ticker}} | {{interval}} | Signed Body Efficiency={{plot(\"Signed Body Efficiency Numerical\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
+
+alertcondition(bodyEfficiencyCrossDown, title="Body Efficiency Cross Down", message="Body Efficiency Cross Down | {{ticker}} | {{interval}} | Signed Body Efficiency={{plot(\"Signed Body Efficiency Numerical\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
 // ── Very-high volume classification.
 
@@ -785,12 +807,6 @@ plot(relativeRange, title="Relative Range Data", display=display.data_window)
 plot(rvol, title="RVOL Data", display=display.data_window)
 
 plot(neutralResponse, title="Neutral Price Response Data", display=display.data_window)
-
-plot(directionalResponse, title="Price Response Numerical", display=display.data_window)
-
-// Keep both raw numerical measures as explicit plots so TradingView can use them as
-// numerical alert filters without changing the named Boolean signal conditions.
-plot(bodyEfficiency, title="Signed Body Efficiency Numerical", display=display.data_window)
 
 plot(volumePercentile, title="Volume Percentile Data", display=display.data_window)
 
