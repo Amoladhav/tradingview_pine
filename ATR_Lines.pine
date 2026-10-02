@@ -1,0 +1,1206 @@
+//@version=6
+
+// Revision: 1.01
+// Changelog:
+// 1.01 - Added source-level documentation and tooltips for the fixed current-day
+//        scope, live-price anchoring, ATR blend, and probability-band models.
+//        No calculation, alert, or timeframe behavior was changed.
+
+indicator("ATR Lines", shorttitle="ATR Lines", overlay=true, max_lines_count=20, max_labels_count=20)
+
+//====================================================================
+
+// HELPERS
+
+//====================================================================
+
+get_label_text(show_d, d_text, show_p, p_val) =>
+
+    string out = ""
+
+    if show_d
+
+        out := d_text
+
+    if show_p
+
+        out := out + (show_d ? " : " : "") + str.tostring(p_val, format.mintick)
+
+    out
+
+get_selected_value(sel, o, h, l, c) =>
+
+    switch sel
+
+        "Open"  => o
+
+        "High"  => h
+
+        "Low"   => l
+
+        "Close" => c
+
+        => o
+
+//====================================================================
+
+// USER SETTINGS
+
+//====================================================================
+
+// Fixed scope by design: current Day data with live/current price as the center.
+// The old Week/Day/Hour and CW/LW/YD/YH selectors were removed because they
+// no longer affect the anchor and added unnecessary settings complexity.
+string target_tf = "1D"
+string sub_tf = "60"
+string tf_code = "D"
+string sub_tf_code = "H"
+int period_offset = 0
+
+// Current-day OHLC is built from chart bars, so use a Daily-or-lower chart.
+float chart_tf_seconds = timeframe.in_seconds()
+float target_tf_seconds = timeframe.in_seconds(target_tf)
+if chart_tf_seconds > target_tf_seconds
+    runtime.error("ATR Lines uses a fixed Day scope. Use a Daily-or-lower chart timeframe.")
+
+g_data = "ATR & Day Range"
+
+l1_basis = input.string(
+
+     "High",
+
+     title="Day Line 1 Basis",
+
+     options=["Open", "High", "Low", "Close"],
+
+     group=g_data,
+
+     tooltip="Price from the current trading day used for Day Line 1.")
+
+l2_basis = input.string(
+
+     "Low",
+
+     title="Day Line 2 Basis",
+
+     options=["Open", "High", "Low", "Close"],
+
+     group=g_data,
+
+     tooltip="Price from the current trading day used for Day Line 2.")
+
+atr_calc_mode = input.string(
+
+     "Max",
+
+     title="ATR Blend",
+
+     options=["Min", "Max", "Avg"],
+
+     group=g_data,
+
+     tooltip="Combines the developing Daily ATR with the latest 60-minute ATR. Max is the conservative default; Avg smooths the two; Min uses the tighter value.")
+
+atr_mult = input.float(
+
+     1.0,
+
+     title="ATR Multiplier",
+
+     minval=0.01,
+
+     step=0.05,
+
+     group=g_data,
+
+     tooltip="Scales the blended ATR distance around Current Price. 1.0 = one blended ATR above/below price; 2.0 = two ATRs.")
+
+atr_len = input.int(
+
+     14,
+
+     title="ATR Length",
+
+     minval=1,
+
+     group=g_data,
+
+     tooltip="Wilder ATR length used for both the developing Daily ATR and the 60-minute ATR component. Default 14 preserves the conventional ATR basis.")
+
+//====================================================================
+
+// PROBABILITY BAND SETTINGS
+
+//====================================================================
+
+g_prob = "Probability Bands"
+
+prob_source = input.string(
+
+     "Historical Empirical",
+
+     title="Probability Model",
+
+     options=["Historical Empirical", "Manual IV (Static)"],
+
+     group=g_prob,
+
+     tooltip="Historical Empirical is the automatic default and uses completed daily log-return quantiles. Manual IV (Static) uses the IV value entered below; it does not read live option-chain IV.")
+
+prob_horizon_days = input.int(
+
+     1,
+
+     title="Probability Horizon (Days)",
+
+     minval=1,
+
+     maxval=365,
+
+     group=g_prob,
+
+     tooltip="Historical mode interprets this as daily trading bars. Manual IV mode uses calendar-day scaling with sqrt(days/365).")
+
+prob_lookback = input.int(
+
+     252,
+
+     title="Historical Lookback (Daily Bars)",
+
+     minval=30,
+
+     maxval=2000,
+
+     group=g_prob,
+
+     active=prob_source == "Historical Empirical",
+
+     tooltip="Number of daily observations used to estimate empirical return quantiles. 252 is approximately one trading year.")
+
+manual_iv_pct = input.float(
+
+     25.0,
+
+     title="Manual Annualized IV (%)",
+
+     minval=0.1,
+
+     step=0.1,
+
+     group=g_prob,
+
+     active=prob_source == "Manual IV (Static)",
+
+     tooltip="Used only with Manual IV (Static). Enter annualized option-chain IV, for example 25 for 25%. Update it manually when IV changes.")
+
+//====================================================================
+
+// LABEL OPTIONS
+
+//====================================================================
+
+g_labels = "Labels"
+
+show_desc = input.bool(
+
+     true,
+
+     title="Show Description",
+
+     group=g_labels,
+
+     tooltip="Shows the line meaning/model in each label. Turn off for price-only labels.")
+
+show_price = input.bool(
+
+     true,
+
+     title="Show Price Values",
+
+     group=g_labels,
+
+     tooltip="Shows the numerical price next to each enabled label.")
+
+lbl_just = input.string(
+
+     "Right",
+
+     title="Label Position",
+
+     options=["Left", "Center", "Right"],
+
+     group=g_labels,
+
+     tooltip="Positions labels at the start, midpoint, or right edge of the displayed horizontal line.")
+
+lbl_size = input.string(
+
+     "Small",
+
+     title="Font Size",
+
+     options=["Tiny", "Small", "Normal", "Large", "Huge"],
+
+     group=g_labels)
+
+parsed_size = switch lbl_size
+
+    "Tiny"   => size.tiny
+
+    "Small"  => size.small
+
+    "Normal" => size.normal
+
+    "Large"  => size.large
+
+    "Huge"   => size.huge
+
+    => size.small
+
+//====================================================================
+
+// LINE STYLE OPTIONS
+
+//====================================================================
+
+g1 = "Current Day Line 1"
+
+show_l1 = input.bool(true, title="Show Line 1", inline="l1", group=g1)
+
+c_l1    = input.color(color.blue, title="", inline="l1", group=g1)
+
+w_l1    = input.int(2, title="Width", minval=1, inline="l1", group=g1)
+
+s_l1    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l1", group=g1)
+
+g2 = "Current Day Line 2"
+
+show_l2 = input.bool(true, title="Show Line 2", inline="l2", group=g2)
+
+c_l2    = input.color(color.orange, title="", inline="l2", group=g2)
+
+w_l2    = input.int(2, title="Width", minval=1, inline="l2", group=g2)
+
+s_l2    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l2", group=g2)
+
+g3 = "ATR Upper"
+
+show_l3 = input.bool(true, title="Show Upper ATR", inline="l3", group=g3)
+
+c_l3    = input.color(color.green, title="", inline="l3", group=g3)
+
+w_l3    = input.int(2, title="Width", minval=1, inline="l3", group=g3)
+
+s_l3    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l3", group=g3)
+
+g4 = "ATR Lower"
+
+show_l4 = input.bool(true, title="Show Lower ATR", inline="l4", group=g4)
+
+c_l4    = input.color(color.red, title="", inline="l4", group=g4)
+
+w_l4    = input.int(2, title="Width", minval=1, inline="l4", group=g4)
+
+s_l4    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l4", group=g4)
+
+g5 = "Current Price"
+
+show_basis = input.bool(true, title="Show Current Price", inline="basis", group=g5)
+
+c_basis    = input.color(color.gray, title="", inline="basis", group=g5)
+
+w_basis    = input.int(1, title="Width", minval=1, inline="basis", group=g5)
+
+s_basis    = input.string(line.style_dotted, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="basis", group=g5)
+
+// Probability ranges are drawing objects, so appearance is controlled here
+// rather than exposing redundant automatic Style-tab controls.
+
+g68 = "Probability 68%"
+show_p68 = input.bool(true, title="Show 68% Band", inline="p68", group=g68)
+c_p68 = input.color(color.aqua, title="", inline="p68", group=g68)
+w_p68 = input.int(2, title="Width", minval=1, maxval=5, inline="p68", group=g68)
+s_p68 = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="p68", group=g68)
+fill_p68 = input.int(88, title="Fill Transparency", minval=0, maxval=100, group=g68, tooltip="0 = opaque fill; 100 = no fill.")
+
+g90 = "Probability 90%"
+show_p90 = input.bool(true, title="Show 90% Band", inline="p90", group=g90)
+c_p90 = input.color(color.orange, title="", inline="p90", group=g90)
+w_p90 = input.int(2, title="Width", minval=1, maxval=5, inline="p90", group=g90)
+s_p90 = input.string(line.style_dashed, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="p90", group=g90)
+fill_p90 = input.int(92, title="Fill Transparency", minval=0, maxval=100, group=g90, tooltip="0 = opaque fill; 100 = no fill.")
+
+g95 = "Probability 95%"
+show_p95 = input.bool(true, title="Show 95% Band", inline="p95", group=g95)
+c_p95 = input.color(color.purple, title="", inline="p95", group=g95)
+w_p95 = input.int(2, title="Width", minval=1, maxval=5, inline="p95", group=g95)
+s_p95 = input.string(line.style_dotted, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="p95", group=g95)
+fill_p95 = input.int(95, title="Fill Transparency", minval=0, maxval=100, group=g95, tooltip="0 = opaque fill; 100 = no fill.")
+
+//====================================================================
+
+// CURRENT-DAY OHLC TRACKING
+
+//
+
+// IMPORTANT DESIGN:
+
+// Current-day OHLC is built directly from chart bars.
+
+// This means:
+
+//   Day High  = highest chart high since the current trading day began.
+
+//   Day Low   = lowest chart low since the current trading day began.
+
+//   Day Open  = first chart-bar open of the current trading day.
+
+//   Day Close = current/live chart close.
+
+//
+
+// At each new trading day, completed values shift internally
+
+// for ATR continuity. There are no user-facing prior-day selectors.
+
+//====================================================================
+
+bool new_target_period = timeframe.change(target_tf)
+
+int target_period_start = time(target_tf)
+
+// Current active target period.
+
+var int   cur_start = na
+
+var float cur_open  = na
+
+var float cur_high  = na
+
+var float cur_low   = na
+
+var float cur_close = na
+
+// Previous 1, 2, 3 completed target periods.
+
+var int   p1_start = na
+
+var float p1_open  = na
+
+var float p1_high  = na
+
+var float p1_low   = na
+
+var float p1_close = na
+
+var int   p2_start = na
+
+var float p2_open  = na
+
+var float p2_high  = na
+
+var float p2_low   = na
+
+var float p2_close = na
+
+var int   p3_start = na
+
+var float p3_open  = na
+
+var float p3_high  = na
+
+var float p3_low   = na
+
+var float p3_close = na
+
+if barstate.isfirst
+
+    cur_start := target_period_start
+
+    cur_open  := open
+
+    cur_high  := high
+
+    cur_low   := low
+
+    cur_close := close
+
+else if new_target_period
+
+    // Shift completed periods.
+
+    p3_start := p2_start
+
+    p3_open  := p2_open
+
+    p3_high  := p2_high
+
+    p3_low   := p2_low
+
+    p3_close := p2_close
+
+    p2_start := p1_start
+
+    p2_open  := p1_open
+
+    p2_high  := p1_high
+
+    p2_low   := p1_low
+
+    p2_close := p1_close
+
+    p1_start := cur_start
+
+    p1_open  := cur_open
+
+    p1_high  := cur_high
+
+    p1_low   := cur_low
+
+    p1_close := cur_close
+
+    // Start the new active period.
+
+    cur_start := target_period_start
+
+    cur_open  := open
+
+    cur_high  := high
+
+    cur_low   := low
+
+    cur_close := close
+
+else
+
+    // Develop current-period OHLC in real time.
+
+    cur_high  := na(cur_high) ? high : math.max(cur_high, high)
+
+    cur_low   := na(cur_low) ? low : math.min(cur_low, low)
+
+    cur_close := close
+
+//====================================================================
+
+// SUB-TIMEFRAME ATR TRACKING
+
+//
+
+// request.security() is used only to obtain the latest 60-minute ATR stream.
+// lookahead_off prevents future 60-minute values from leaking into history.
+// On a live chart the current 60-minute ATR can still develop until that
+// 60-minute bar closes; this is intentional because the ATR bands are meant
+// to reflect current conditions rather than a frozen prior-hour reading.
+// We snapshot the stream at the same Daily boundaries used above.
+
+//====================================================================
+
+float sub_atr_stream = request.security(
+
+     syminfo.tickerid,
+
+     sub_tf,
+
+     ta.atr(atr_len),
+
+     barmerge.gaps_off,
+
+     barmerge.lookahead_off)
+
+var float cur_sub_atr = na
+
+var float p1_sub_atr  = na
+
+var float p2_sub_atr  = na
+
+var float p3_sub_atr  = na
+
+if barstate.isfirst
+
+    cur_sub_atr := sub_atr_stream
+
+else if new_target_period
+
+    p3_sub_atr := p2_sub_atr
+
+    p2_sub_atr := p1_sub_atr
+
+    p1_sub_atr := cur_sub_atr
+
+    cur_sub_atr := sub_atr_stream
+
+else
+
+    cur_sub_atr := sub_atr_stream
+
+//====================================================================
+
+// PRIMARY ATR
+
+//
+
+// Prior Daily ATR values are requested with fixed historical offsets.
+// lookahead_on is safe here because every requested ATR expression is offset
+// by at least one Daily bar; only already-confirmed Daily values are exposed.
+// The current Daily ATR is reconstructed from the previous confirmed ATR plus
+// the current developing Daily True Range using Wilder/RMA updating.
+// Therefore the current Daily ATR intentionally changes intraday as the day's
+// high/low range develops; no future Daily information is used.
+
+//====================================================================
+
+[target_atr_p1, target_atr_p2, target_atr_p3] = request.security(
+
+     syminfo.tickerid,
+
+     target_tf,
+
+     [ta.atr(atr_len)[1], ta.atr(atr_len)[2], ta.atr(atr_len)[3]],
+
+     barmerge.gaps_off,
+
+     barmerge.lookahead_on)
+
+float cur_true_range = na(p1_close) ? (cur_high - cur_low) :
+
+     math.max(
+
+          cur_high - cur_low,
+
+          math.max(
+
+               math.abs(cur_high - p1_close),
+
+               math.abs(cur_low - p1_close)))
+
+float target_atr_current = na(target_atr_p1) ? na :
+
+     ((target_atr_p1 * (atr_len - 1)) + cur_true_range) / atr_len
+
+//====================================================================
+
+// RESOLVE THE ACTIVE PERIOD
+
+//====================================================================
+
+float sel_open = switch period_offset
+
+    0 => cur_open
+
+    1 => p1_open
+
+    2 => p2_open
+
+    3 => p3_open
+
+    => cur_open
+
+float sel_high = switch period_offset
+
+    0 => cur_high
+
+    1 => p1_high
+
+    2 => p2_high
+
+    3 => p3_high
+
+    => cur_high
+
+float sel_low = switch period_offset
+
+    0 => cur_low
+
+    1 => p1_low
+
+    2 => p2_low
+
+    3 => p3_low
+
+    => cur_low
+
+float sel_close = switch period_offset
+
+    0 => cur_close
+
+    1 => p1_close
+
+    2 => p2_close
+
+    3 => p3_close
+
+    => cur_close
+
+int sel_start = switch period_offset
+
+    0 => cur_start
+
+    1 => p1_start
+
+    2 => p2_start
+
+    3 => p3_start
+
+    => cur_start
+
+float selected_primary_atr = switch period_offset
+
+    0 => target_atr_current
+
+    1 => target_atr_p1
+
+    2 => target_atr_p2
+
+    3 => target_atr_p3
+
+    => target_atr_current
+
+float selected_sub_atr = switch period_offset
+
+    0 => cur_sub_atr
+
+    1 => p1_sub_atr
+
+    2 => p2_sub_atr
+
+    3 => p3_sub_atr
+
+    => cur_sub_atr
+
+
+//====================================================================
+
+// PROBABILITY BAND CALCULATION
+
+//====================================================================
+
+// Historical Empirical mode uses only completed Daily closes. For a horizon N,
+// each observation is log(close[t] / close[t-N]); the central intervals are the
+// empirical 16/84, 5/95, and 2.5/97.5 percentiles for 68%, 90%, and 95%.
+// This deliberately preserves observed skew/fat tails instead of forcing a
+// normal distribution. The quantiles remain fixed intraday, but the displayed
+// price bands move with live close because Current Price is always the anchor.
+//
+// Manual IV (Static) assumes normally distributed log returns with zero drift.
+// Annualized IV is scaled by sqrt(calendar days / 365), then mapped with the
+// standard z levels for 68%, 90%, and 95% central ranges. The entered IV does
+// NOT update from TradingView's option chain; the user must refresh it manually.
+// Both models are ranges/estimates, not guarantees of future containment.
+
+[daily_q16, daily_q84, daily_q05, daily_q95, daily_q025, daily_q975] = request.security(
+     syminfo.tickerid,
+     "1D",
+     [
+          ta.percentile_linear_interpolation(math.log(close[1] / close[prob_horizon_days + 1]), prob_lookback, 16.0),
+          ta.percentile_linear_interpolation(math.log(close[1] / close[prob_horizon_days + 1]), prob_lookback, 84.0),
+          ta.percentile_linear_interpolation(math.log(close[1] / close[prob_horizon_days + 1]), prob_lookback, 5.0),
+          ta.percentile_linear_interpolation(math.log(close[1] / close[prob_horizon_days + 1]), prob_lookback, 95.0),
+          ta.percentile_linear_interpolation(math.log(close[1] / close[prob_horizon_days + 1]), prob_lookback, 2.5),
+          ta.percentile_linear_interpolation(math.log(close[1] / close[prob_horizon_days + 1]), prob_lookback, 97.5)
+     ],
+     barmerge.gaps_off,
+     barmerge.lookahead_off)
+
+// Live close is the single center for ATR and probability bands.
+// This is intentionally independent of Day High/Low and any prior-period value.
+float prob_anchor = close
+
+// Option-style volatility scaling for the static-IV model.
+float iv_sigma_horizon = (manual_iv_pct / 100.0) * math.sqrt(prob_horizon_days / 365.0)
+float z68 = 1.0
+float z90 = 1.64485362695147
+float z95 = 1.95996398454005
+
+float p68_lower_return = prob_source == "Manual IV (Static)" ? -z68 * iv_sigma_horizon : daily_q16
+float p68_upper_return = prob_source == "Manual IV (Static)" ?  z68 * iv_sigma_horizon : daily_q84
+float p90_lower_return = prob_source == "Manual IV (Static)" ? -z90 * iv_sigma_horizon : daily_q05
+float p90_upper_return = prob_source == "Manual IV (Static)" ?  z90 * iv_sigma_horizon : daily_q95
+float p95_lower_return = prob_source == "Manual IV (Static)" ? -z95 * iv_sigma_horizon : daily_q025
+float p95_upper_return = prob_source == "Manual IV (Static)" ?  z95 * iv_sigma_horizon : daily_q975
+
+float p68_low = na(p68_lower_return) ? na : prob_anchor * math.exp(p68_lower_return)
+float p68_high = na(p68_upper_return) ? na : prob_anchor * math.exp(p68_upper_return)
+float p90_low = na(p90_lower_return) ? na : prob_anchor * math.exp(p90_lower_return)
+float p90_high = na(p90_upper_return) ? na : prob_anchor * math.exp(p90_upper_return)
+float p95_low = na(p95_lower_return) ? na : prob_anchor * math.exp(p95_lower_return)
+float p95_high = na(p95_upper_return) ? na : prob_anchor * math.exp(p95_upper_return)
+
+string prob_source_text = prob_source == "Manual IV (Static)" ? "Manual IV " + str.tostring(manual_iv_pct, "#.##") + "%" : "Historical Empirical"
+
+//====================================================================
+
+// GRAPHIC CONTAINERS
+
+//====================================================================
+
+var line l1 = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+
+var label lbl1 = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+
+var line l2 = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+
+var label lbl2 = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+
+var line l3 = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+
+var label lbl3 = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+
+var line l4 = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+
+var label lbl4 = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+
+var line l_basis = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+
+var label lbl_basis = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+
+var line l_p68_hi = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+var label lbl_p68_hi = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+var line l_p68_lo = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+var label lbl_p68_lo = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+var linefill fill68 = linefill.new(l_p68_hi, l_p68_lo, color.new(c_p68, fill_p68))
+
+var line l_p90_hi = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+var label lbl_p90_hi = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+var line l_p90_lo = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+var label lbl_p90_lo = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+var linefill fill90 = linefill.new(l_p90_hi, l_p90_lo, color.new(c_p90, fill_p90))
+
+var line l_p95_hi = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+var label lbl_p95_hi = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+var line l_p95_lo = line.new(na, na, na, na, xloc=xloc.bar_time, extend=extend.right)
+var label lbl_p95_lo = label.new(na, na, text="", xloc=xloc.bar_time, style=label.style_none)
+var linefill fill95 = linefill.new(l_p95_hi, l_p95_lo, color.new(c_p95, fill_p95))
+
+//====================================================================
+
+// RENDER
+
+//====================================================================
+
+if barstate.islast
+
+    float base_atr = switch atr_calc_mode
+
+        "Min" => math.min(selected_primary_atr, selected_sub_atr)
+
+        "Max" => math.max(selected_primary_atr, selected_sub_atr)
+
+        "Avg" => math.avg(selected_primary_atr, selected_sub_atr)
+
+        => math.max(selected_primary_atr, selected_sub_atr)
+
+    float final_atr = base_atr * atr_mult
+
+    float val_l1 = get_selected_value(l1_basis, sel_open, sel_high, sel_low, sel_close)
+
+    float val_l2 = get_selected_value(l2_basis, sel_open, sel_high, sel_low, sel_close)
+
+    // ATR bands are always centered on live close. The selected Day High/Low
+    // display lines do not influence the anchor. ATR/range data remains fixed
+    // to the current-Day scope described above.
+
+    float anchor_price = close
+
+    string anchor_label = "Current Price"
+
+    // Exact symmetric ATR bands.
+
+    float val_atr_h = anchor_price + final_atr
+
+    float val_atr_l = anchor_price - final_atr
+
+    string atr_component_text =
+
+         tf_code + "=" + str.tostring(selected_primary_atr, format.mintick) +
+
+         ", " + sub_tf_code + "=" + str.tostring(selected_sub_atr, format.mintick)
+
+    string atr_mode_text =
+
+         atr_calc_mode + " ATR x " + str.tostring(atr_mult, "#.##")
+
+    string basis_text = ""
+
+    if show_desc
+
+        basis_text := "Current Price"
+
+    basis_text := basis_text +
+
+         (basis_text == "" ? "" : " | ") +
+
+         "ATR Used: " + str.tostring(final_atr, format.mintick) +
+
+         " [" + atr_component_text + "]"
+
+    if show_price
+
+        basis_text := basis_text + " | Basis: " + str.tostring(anchor_price, format.mintick)
+
+    int label_x_pos = timenow
+
+    string label_align = text.align_right
+
+    if lbl_just == "Left"
+
+        label_x_pos := sel_start
+
+        label_align := text.align_left
+
+    else if lbl_just == "Center"
+
+        label_x_pos := int(math.avg(sel_start, timenow))
+
+        label_align := text.align_center
+
+    // -------------------------
+
+    // Line 1
+
+    // -------------------------
+
+    line.set_color(l1, c_l1)
+
+    line.set_width(l1, w_l1)
+
+    line.set_style(l1, s_l1)
+
+    label.set_textcolor(lbl1, c_l1)
+
+    label.set_size(lbl1, parsed_size)
+
+    label.set_textalign(lbl1, label_align)
+
+    if show_l1 and not na(sel_start) and not na(val_l1)
+
+        line.set_xy1(l1, sel_start, val_l1)
+
+        line.set_xy2(l1, timenow, val_l1)
+
+        if show_desc or show_price
+
+            label.set_xy(lbl1, label_x_pos, val_l1)
+
+            label.set_text(lbl1, get_label_text(show_desc, "Current Day " + l1_basis, show_price, val_l1))
+
+        else
+
+            label.set_xy(lbl1, na, na)
+
+    else
+
+        line.set_xy1(l1, na, na)
+
+        line.set_xy2(l1, na, na)
+
+        label.set_xy(lbl1, na, na)
+
+    // -------------------------
+
+    // Line 2
+
+    // -------------------------
+
+    line.set_color(l2, c_l2)
+
+    line.set_width(l2, w_l2)
+
+    line.set_style(l2, s_l2)
+
+    label.set_textcolor(lbl2, c_l2)
+
+    label.set_size(lbl2, parsed_size)
+
+    label.set_textalign(lbl2, label_align)
+
+    if show_l2 and not na(sel_start) and not na(val_l2)
+
+        line.set_xy1(l2, sel_start, val_l2)
+
+        line.set_xy2(l2, timenow, val_l2)
+
+        if show_desc or show_price
+
+            label.set_xy(lbl2, label_x_pos, val_l2)
+
+            label.set_text(lbl2, get_label_text(show_desc, "Current Day " + l2_basis, show_price, val_l2))
+
+        else
+
+            label.set_xy(lbl2, na, na)
+
+    else
+
+        line.set_xy1(l2, na, na)
+
+        line.set_xy2(l2, na, na)
+
+        label.set_xy(lbl2, na, na)
+
+    // -------------------------
+
+    // Current Price
+
+    // -------------------------
+
+    line.set_color(l_basis, c_basis)
+
+    line.set_width(l_basis, w_basis)
+
+    line.set_style(l_basis, s_basis)
+
+    label.set_textcolor(lbl_basis, c_basis)
+
+    label.set_size(lbl_basis, parsed_size)
+
+    label.set_textalign(lbl_basis, label_align)
+
+    if show_basis and not na(sel_start) and not na(anchor_price)
+
+        line.set_xy1(l_basis, sel_start, anchor_price)
+
+        line.set_xy2(l_basis, timenow, anchor_price)
+
+        label.set_xy(lbl_basis, label_x_pos, anchor_price)
+
+        label.set_text(lbl_basis, basis_text)
+
+    else
+
+        line.set_xy1(l_basis, na, na)
+
+        line.set_xy2(l_basis, na, na)
+
+        label.set_xy(lbl_basis, na, na)
+
+    // -------------------------
+
+    // Upper ATR
+
+    // -------------------------
+
+    line.set_color(l3, c_l3)
+
+    line.set_width(l3, w_l3)
+
+    line.set_style(l3, s_l3)
+
+    label.set_textcolor(lbl3, c_l3)
+
+    label.set_size(lbl3, parsed_size)
+
+    label.set_textalign(lbl3, label_align)
+
+    if show_l3 and not na(sel_start) and not na(val_atr_h)
+
+        line.set_xy1(l3, sel_start, val_atr_h)
+
+        line.set_xy2(l3, timenow, val_atr_h)
+
+        if show_desc or show_price
+
+            label.set_xy(lbl3, label_x_pos, val_atr_h)
+
+            label.set_text(
+
+                 lbl3,
+
+                 get_label_text(
+
+                      show_desc,
+
+                      "ATR Upper (" + anchor_label + " + " + atr_mode_text + ")",
+
+                      show_price,
+
+                      val_atr_h))
+
+        else
+
+            label.set_xy(lbl3, na, na)
+
+    else
+
+        line.set_xy1(l3, na, na)
+
+        line.set_xy2(l3, na, na)
+
+        label.set_xy(lbl3, na, na)
+
+    // -------------------------
+
+    // Lower ATR
+
+    // -------------------------
+
+    line.set_color(l4, c_l4)
+
+    line.set_width(l4, w_l4)
+
+    line.set_style(l4, s_l4)
+
+    label.set_textcolor(lbl4, c_l4)
+
+    label.set_size(lbl4, parsed_size)
+
+    label.set_textalign(lbl4, label_align)
+
+    if show_l4 and not na(sel_start) and not na(val_atr_l)
+
+        line.set_xy1(l4, sel_start, val_atr_l)
+
+        line.set_xy2(l4, timenow, val_atr_l)
+
+        if show_desc or show_price
+
+            label.set_xy(lbl4, label_x_pos, val_atr_l)
+
+            label.set_text(
+
+                 lbl4,
+
+                 get_label_text(
+
+                      show_desc,
+
+                      "ATR Lower (" + anchor_label + " - " + atr_mode_text + ")",
+
+                      show_price,
+
+                      val_atr_l))
+
+        else
+
+            label.set_xy(lbl4, na, na)
+
+    else
+
+        line.set_xy1(l4, na, na)
+
+        line.set_xy2(l4, na, na)
+
+        label.set_xy(lbl4, na, na)
+
+    // -------------------------
+
+    // Probability bands
+
+    // -------------------------
+
+    // Probability lines begin on the current chart bar and extend right.
+    // They are intentionally not drawn backward because the range is a
+    // forward-looking projection anchored to the current live price.
+    int prob_start = time
+    int prob_label_x_pos = timenow
+    if lbl_just == "Left"
+        prob_label_x_pos := prob_start
+    else if lbl_just == "Center"
+        prob_label_x_pos := int(math.avg(prob_start, timenow))
+    string prob_horizon_text = str.tostring(prob_horizon_days) + "D"
+
+    line.set_color(l_p68_hi, c_p68)
+    line.set_width(l_p68_hi, w_p68)
+    line.set_style(l_p68_hi, s_p68)
+    line.set_color(l_p68_lo, c_p68)
+    line.set_width(l_p68_lo, w_p68)
+    line.set_style(l_p68_lo, s_p68)
+    label.set_textcolor(lbl_p68_hi, c_p68)
+    label.set_textcolor(lbl_p68_lo, c_p68)
+    label.set_size(lbl_p68_hi, parsed_size)
+    label.set_size(lbl_p68_lo, parsed_size)
+    label.set_textalign(lbl_p68_hi, label_align)
+    label.set_textalign(lbl_p68_lo, label_align)
+    linefill.set_color(fill68, show_p68 ? color.new(c_p68, fill_p68) : color.new(c_p68, 100))
+
+    if show_p68 and not na(p68_high) and not na(p68_low)
+        line.set_xy1(l_p68_hi, prob_start, p68_high)
+        line.set_xy2(l_p68_hi, timenow, p68_high)
+        line.set_xy1(l_p68_lo, prob_start, p68_low)
+        line.set_xy2(l_p68_lo, timenow, p68_low)
+        if show_desc or show_price
+            label.set_xy(lbl_p68_hi, prob_label_x_pos, p68_high)
+            label.set_text(lbl_p68_hi, get_label_text(show_desc, "68% Prob Upper (" + prob_source_text + ", " + prob_horizon_text + ")", show_price, p68_high))
+            label.set_xy(lbl_p68_lo, prob_label_x_pos, p68_low)
+            label.set_text(lbl_p68_lo, get_label_text(show_desc, "68% Prob Lower (" + prob_source_text + ", " + prob_horizon_text + ")", show_price, p68_low))
+        else
+            label.set_xy(lbl_p68_hi, na, na)
+            label.set_xy(lbl_p68_lo, na, na)
+    else
+        line.set_xy1(l_p68_hi, na, na)
+        line.set_xy2(l_p68_hi, na, na)
+        line.set_xy1(l_p68_lo, na, na)
+        line.set_xy2(l_p68_lo, na, na)
+        label.set_xy(lbl_p68_hi, na, na)
+        label.set_xy(lbl_p68_lo, na, na)
+
+    line.set_color(l_p90_hi, c_p90)
+    line.set_width(l_p90_hi, w_p90)
+    line.set_style(l_p90_hi, s_p90)
+    line.set_color(l_p90_lo, c_p90)
+    line.set_width(l_p90_lo, w_p90)
+    line.set_style(l_p90_lo, s_p90)
+    label.set_textcolor(lbl_p90_hi, c_p90)
+    label.set_textcolor(lbl_p90_lo, c_p90)
+    label.set_size(lbl_p90_hi, parsed_size)
+    label.set_size(lbl_p90_lo, parsed_size)
+    label.set_textalign(lbl_p90_hi, label_align)
+    label.set_textalign(lbl_p90_lo, label_align)
+    linefill.set_color(fill90, show_p90 ? color.new(c_p90, fill_p90) : color.new(c_p90, 100))
+
+    if show_p90 and not na(p90_high) and not na(p90_low)
+        line.set_xy1(l_p90_hi, prob_start, p90_high)
+        line.set_xy2(l_p90_hi, timenow, p90_high)
+        line.set_xy1(l_p90_lo, prob_start, p90_low)
+        line.set_xy2(l_p90_lo, timenow, p90_low)
+        if show_desc or show_price
+            label.set_xy(lbl_p90_hi, prob_label_x_pos, p90_high)
+            label.set_text(lbl_p90_hi, get_label_text(show_desc, "90% Prob Upper (" + prob_source_text + ", " + prob_horizon_text + ")", show_price, p90_high))
+            label.set_xy(lbl_p90_lo, prob_label_x_pos, p90_low)
+            label.set_text(lbl_p90_lo, get_label_text(show_desc, "90% Prob Lower (" + prob_source_text + ", " + prob_horizon_text + ")", show_price, p90_low))
+        else
+            label.set_xy(lbl_p90_hi, na, na)
+            label.set_xy(lbl_p90_lo, na, na)
+    else
+        line.set_xy1(l_p90_hi, na, na)
+        line.set_xy2(l_p90_hi, na, na)
+        line.set_xy1(l_p90_lo, na, na)
+        line.set_xy2(l_p90_lo, na, na)
+        label.set_xy(lbl_p90_hi, na, na)
+        label.set_xy(lbl_p90_lo, na, na)
+
+    line.set_color(l_p95_hi, c_p95)
+    line.set_width(l_p95_hi, w_p95)
+    line.set_style(l_p95_hi, s_p95)
+    line.set_color(l_p95_lo, c_p95)
+    line.set_width(l_p95_lo, w_p95)
+    line.set_style(l_p95_lo, s_p95)
+    label.set_textcolor(lbl_p95_hi, c_p95)
+    label.set_textcolor(lbl_p95_lo, c_p95)
+    label.set_size(lbl_p95_hi, parsed_size)
+    label.set_size(lbl_p95_lo, parsed_size)
+    label.set_textalign(lbl_p95_hi, label_align)
+    label.set_textalign(lbl_p95_lo, label_align)
+    linefill.set_color(fill95, show_p95 ? color.new(c_p95, fill_p95) : color.new(c_p95, 100))
+
+    if show_p95 and not na(p95_high) and not na(p95_low)
+        line.set_xy1(l_p95_hi, prob_start, p95_high)
+        line.set_xy2(l_p95_hi, timenow, p95_high)
+        line.set_xy1(l_p95_lo, prob_start, p95_low)
+        line.set_xy2(l_p95_lo, timenow, p95_low)
+        if show_desc or show_price
+            label.set_xy(lbl_p95_hi, prob_label_x_pos, p95_high)
+            label.set_text(lbl_p95_hi, get_label_text(show_desc, "95% Prob Upper (" + prob_source_text + ", " + prob_horizon_text + ")", show_price, p95_high))
+            label.set_xy(lbl_p95_lo, prob_label_x_pos, p95_low)
+            label.set_text(lbl_p95_lo, get_label_text(show_desc, "95% Prob Lower (" + prob_source_text + ", " + prob_horizon_text + ")", show_price, p95_low))
+        else
+            label.set_xy(lbl_p95_hi, na, na)
+            label.set_xy(lbl_p95_lo, na, na)
+    else
+        line.set_xy1(l_p95_hi, na, na)
+        line.set_xy2(l_p95_hi, na, na)
+        line.set_xy1(l_p95_lo, na, na)
+        line.set_xy2(l_p95_lo, na, na)
+        label.set_xy(lbl_p95_hi, na, na)
+        label.set_xy(lbl_p95_lo, na, na)
+
