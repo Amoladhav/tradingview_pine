@@ -1,7 +1,14 @@
 //@version=6
 
-// Revision: 1.01
+// Revision: 1.03
 // Changelog:
+// 1.03 - Reworked the defensive range calculation for covered-call strike context.
+//        H/D/W now use only their own completed True Range bars: H=70, D=21, W=13
+//        by default. Range statistic choices are Avg, 90th percentile, and Max.
+//        Removed all sub-timeframe ATR blending; probability bands remain independent.
+// 1.02 - Restored Week/Day/Hour scope and completed-period selectors for ATR/range
+//        calculations. ATR remains anchored to live close. Probability bands are
+//        independent of ATR logic and are off by default.
 // 1.01 - Added source-level documentation and tooltips for the fixed current-day
 //        scope, live-price anchoring, ATR blend, and probability-band models.
 //        No calculation, alert, or timeframe behavior was changed.
@@ -42,70 +49,150 @@ get_selected_value(sel, o, h, l, c) =>
 
         => o
 
+// Computes defensive range statistics from COMPLETED bars only on the requested
+// scope. Shifting True Range by one bar prevents a partial current H/D/W bar from
+// biasing the population lower early in the period. The 90th percentile uses
+// linear interpolation so it is conservative without collapsing to a single max.
+get_confirmed_tr_stats(_lookback) =>
+
+    float raw_tr = ta.tr(true)
+
+    float confirmed_tr = raw_tr[1]
+
+    float avg_tr = ta.sma(confirmed_tr, _lookback)
+
+    float p90_tr = ta.percentile_linear_interpolation(confirmed_tr, _lookback, 90.0)
+
+    float max_tr = ta.highest(confirmed_tr, _lookback)
+
+    [avg_tr, p90_tr, max_tr]
+
 //====================================================================
 
 // USER SETTINGS
 
 //====================================================================
 
-// Fixed scope by design: current Day data with live/current price as the center.
-// The old Week/Day/Hour and CW/LW/YD/YH selectors were removed because they
-// no longer affect the anchor and added unnecessary settings complexity.
-string target_tf = "1D"
-string sub_tf = "60"
-string tf_code = "D"
-string sub_tf_code = "H"
-int period_offset = 0
+// The selected scope controls the True Range population and reference OHLC lines.
+// H uses 60-minute bars only, D uses Daily bars only, and W uses Weekly bars only.
+// No lower/sub-timeframe data is mixed into the range statistic. Range and
+// probability bands are always centered on live/current close.
+g_mode = "Timeframe Mode"
 
-// Current-day OHLC is built from chart bars, so use a Daily-or-lower chart.
+tf_mode = input.string(
+     "Week",
+     title="Active Timeframe Scope",
+     options=["Week", "Day", "Hour"],
+     group=g_mode,
+     tooltip="Controls the range population and reference OHLC scope. Hour uses 60-minute bars only, Day uses Daily bars only, and Week uses Weekly bars only. No sub-timeframe data is mixed in. The range center remains live Current Price.")
+
+// Separate selectors preserve the historical reference period for Line 1 and
+// Line 2 only. They do NOT affect the Avg/P90/Max range population or its anchor.
+week_select = input.string(
+     "LW",
+     title="Week Selection",
+     options=["CW", "LW", "-2WK", "-3W"],
+     group=g_mode,
+     tooltip="Reference period for Line 1 and Line 2 only. CW = current week; LW = previous completed week; -2WK/-3W = earlier completed weeks. Range statistics always use the configured Weekly lookback and live Current Price anchor.")
+
+day_select = input.string(
+     "YD",
+     title="Day Selection",
+     options=["Curr D", "YD", "-2D", "-3D"],
+     group=g_mode,
+     tooltip="Reference period for Line 1 and Line 2 only. Curr D = current trading day; YD = previous completed trading day; -2D/-3D = earlier completed days. Range statistics always use the configured Daily lookback and live Current Price anchor.")
+
+hour_select = input.string(
+     "YH",
+     title="Hour Selection",
+     options=["Curr H", "YH", "-2H", "-3H"],
+     group=g_mode,
+     tooltip="Reference period for Line 1 and Line 2 only. Curr H = current 60-minute period; YH = previous completed 60-minute period; -2H/-3H = earlier completed hours. Range statistics always use the configured Hourly lookback and live Current Price anchor.")
+
+string active_select = switch tf_mode
+    "Week" => week_select
+    "Day"  => day_select
+    "Hour" => hour_select
+    => week_select
+
+int period_offset = switch active_select
+    "CW"     => 0
+    "LW"     => 1
+    "-2WK"   => 2
+    "-3W"    => 3
+    "Curr D" => 0
+    "YD"     => 1
+    "-2D"    => 2
+    "-3D"    => 3
+    "Curr H" => 0
+    "YH"     => 1
+    "-2H"    => 2
+    "-3H"    => 3
+    => 0
+
+string target_tf = switch tf_mode
+    "Week" => "1W"
+    "Day"  => "1D"
+    "Hour" => "60"
+    => "1W"
+
+string tf_code = switch tf_mode
+    "Week" => "W"
+    "Day"  => "D"
+    "Hour" => "H"
+    => "W"
+
+// Current-period OHLC is reconstructed from chart bars. Requiring the chart
+// timeframe to be <= the selected primary scope avoids sampling lower-timeframe
+// OHLC through request.security() and preserves the original developing behavior.
 float chart_tf_seconds = timeframe.in_seconds()
 float target_tf_seconds = timeframe.in_seconds(target_tf)
 if chart_tf_seconds > target_tf_seconds
-    runtime.error("ATR Lines uses a fixed Day scope. Use a Daily-or-lower chart timeframe.")
+    runtime.error("Chart timeframe must be <= the selected Active Timeframe Scope. Example: Hour mode requires a 60-minute-or-lower chart.")
 
-g_data = "ATR & Day Range"
+g_data = "ATR & Range"
 
 l1_basis = input.string(
 
      "High",
 
-     title="Day Line 1 Basis",
+     title="Line 1 Price Basis",
 
      options=["Open", "High", "Low", "Close"],
 
      group=g_data,
 
-     tooltip="Price from the current trading day used for Day Line 1.")
+     tooltip="OHLC value from the selected Week/Day/Hour period used for Line 1.")
 
 l2_basis = input.string(
 
      "Low",
 
-     title="Day Line 2 Basis",
+     title="Line 2 Price Basis",
 
      options=["Open", "High", "Low", "Close"],
 
      group=g_data,
 
-     tooltip="Price from the current trading day used for Day Line 2.")
+     tooltip="OHLC value from the selected Week/Day/Hour period used for Line 2.")
 
-atr_calc_mode = input.string(
+range_method = input.string(
 
-     "Max",
+     "90th Percentile",
 
-     title="ATR Blend",
+     title="Range Statistic",
 
-     options=["Min", "Max", "Avg"],
+     options=["Avg", "90th Percentile", "Max"],
 
      group=g_data,
 
-     tooltip="Combines the developing Daily ATR with the latest 60-minute ATR. Max is the conservative default; Avg smooths the two; Min uses the tighter value.")
+     tooltip="Avg = arithmetic mean True Range over the selected scope lookback. 90th Percentile = defensive default that ignores only the most extreme tail. Max = most conservative observed True Range in the window. All calculations use completed bars only on the selected H/D/W scope.")
 
-atr_mult = input.float(
+range_mult = input.float(
 
      1.0,
 
-     title="ATR Multiplier",
+     title="Range Multiplier",
 
      minval=0.01,
 
@@ -113,27 +200,63 @@ atr_mult = input.float(
 
      group=g_data,
 
-     tooltip="Scales the blended ATR distance around Current Price. 1.0 = one blended ATR above/below price; 2.0 = two ATRs.")
+     tooltip="Scales the selected True Range statistic around Current Price. 1.0 uses the statistic directly; values above 1.0 add an additional defensive buffer.")
 
-atr_len = input.int(
+hour_lookback = input.int(
 
-     14,
+     70,
 
-     title="ATR Length",
+     title="Hourly Lookback",
 
-     minval=1,
+     minval=5,
 
      group=g_data,
 
-     tooltip="Wilder ATR length used for both the developing Daily ATR and the 60-minute ATR component. Default 14 preserves the conventional ATR basis.")
+     active=tf_mode == "Hour",
+
+     tooltip="Number of completed 60-minute bars used in Hour mode. Default 70 is roughly two regular U.S. equity trading weeks and is intentionally defensive against week-to-week volatility shifts.")
+
+day_lookback = input.int(
+
+     21,
+
+     title="Daily Lookback",
+
+     minval=5,
+
+     group=g_data,
+
+     active=tf_mode == "Day",
+
+     tooltip="Number of completed Daily bars used in Day mode. Default 21 is approximately one trading month, reducing the chance that a single quiet week contracts the range too quickly.")
+
+week_lookback = input.int(
+
+     13,
+
+     title="Weekly Lookback",
+
+     minval=5,
+
+     group=g_data,
+
+     active=tf_mode == "Week",
+
+     tooltip="Number of completed Weekly bars used in Week mode. Default 13 is approximately one quarter, balancing structural context against stale volatility regimes.")
+
+int active_range_lookback = switch tf_mode
+    "Hour" => hour_lookback
+    "Day"  => day_lookback
+    "Week" => week_lookback
+    => week_lookback
 
 //====================================================================
 
-// PROBABILITY BAND SETTINGS
+// OPTIONAL PROBABILITY BAND SETTINGS
 
 //====================================================================
 
-g_prob = "Probability Bands"
+g_prob = "Probability Bands (Optional / Independent)"
 
 prob_source = input.string(
 
@@ -263,7 +386,7 @@ parsed_size = switch lbl_size
 
 //====================================================================
 
-g1 = "Current Day Line 1"
+g1 = "Line 1 Style Options"
 
 show_l1 = input.bool(true, title="Show Line 1", inline="l1", group=g1)
 
@@ -273,7 +396,7 @@ w_l1    = input.int(2, title="Width", minval=1, inline="l1", group=g1)
 
 s_l1    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l1", group=g1)
 
-g2 = "Current Day Line 2"
+g2 = "Line 2 Style Options"
 
 show_l2 = input.bool(true, title="Show Line 2", inline="l2", group=g2)
 
@@ -283,9 +406,9 @@ w_l2    = input.int(2, title="Width", minval=1, inline="l2", group=g2)
 
 s_l2    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l2", group=g2)
 
-g3 = "ATR Upper"
+g3 = "Range Upper"
 
-show_l3 = input.bool(true, title="Show Upper ATR", inline="l3", group=g3)
+show_l3 = input.bool(true, title="Show Upper Range", inline="l3", group=g3)
 
 c_l3    = input.color(color.green, title="", inline="l3", group=g3)
 
@@ -293,9 +416,9 @@ w_l3    = input.int(2, title="Width", minval=1, inline="l3", group=g3)
 
 s_l3    = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="l3", group=g3)
 
-g4 = "ATR Lower"
+g4 = "Range Lower"
 
-show_l4 = input.bool(true, title="Show Lower ATR", inline="l4", group=g4)
+show_l4 = input.bool(true, title="Show Lower Range", inline="l4", group=g4)
 
 c_l4    = input.color(color.red, title="", inline="l4", group=g4)
 
@@ -317,21 +440,21 @@ s_basis    = input.string(line.style_dotted, title="", options=[line.style_solid
 // rather than exposing redundant automatic Style-tab controls.
 
 g68 = "Probability 68%"
-show_p68 = input.bool(true, title="Show 68% Band", inline="p68", group=g68)
+show_p68 = input.bool(false, title="Show 68% Band", inline="p68", group=g68)
 c_p68 = input.color(color.aqua, title="", inline="p68", group=g68)
 w_p68 = input.int(2, title="Width", minval=1, maxval=5, inline="p68", group=g68)
 s_p68 = input.string(line.style_solid, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="p68", group=g68)
 fill_p68 = input.int(88, title="Fill Transparency", minval=0, maxval=100, group=g68, tooltip="0 = opaque fill; 100 = no fill.")
 
 g90 = "Probability 90%"
-show_p90 = input.bool(true, title="Show 90% Band", inline="p90", group=g90)
+show_p90 = input.bool(false, title="Show 90% Band", inline="p90", group=g90)
 c_p90 = input.color(color.orange, title="", inline="p90", group=g90)
 w_p90 = input.int(2, title="Width", minval=1, maxval=5, inline="p90", group=g90)
 s_p90 = input.string(line.style_dashed, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="p90", group=g90)
 fill_p90 = input.int(92, title="Fill Transparency", minval=0, maxval=100, group=g90, tooltip="0 = opaque fill; 100 = no fill.")
 
 g95 = "Probability 95%"
-show_p95 = input.bool(true, title="Show 95% Band", inline="p95", group=g95)
+show_p95 = input.bool(false, title="Show 95% Band", inline="p95", group=g95)
 c_p95 = input.color(color.purple, title="", inline="p95", group=g95)
 w_p95 = input.int(2, title="Width", minval=1, maxval=5, inline="p95", group=g95)
 s_p95 = input.string(line.style_dotted, title="", options=[line.style_solid, line.style_dashed, line.style_dotted], inline="p95", group=g95)
@@ -339,29 +462,16 @@ fill_p95 = input.int(95, title="Fill Transparency", minval=0, maxval=100, group=
 
 //====================================================================
 
-// CURRENT-DAY OHLC TRACKING
+// PRIMARY-PERIOD OHLC TRACKING
 
 //
 
 // IMPORTANT DESIGN:
 
-// Current-day OHLC is built directly from chart bars.
-
-// This means:
-
-//   Day High  = highest chart high since the current trading day began.
-
-//   Day Low   = lowest chart low since the current trading day began.
-
-//   Day Open  = first chart-bar open of the current trading day.
-
-//   Day Close = current/live chart close.
-
-//
-
-// At each new trading day, completed values shift internally
-
-// for ATR continuity. There are no user-facing prior-day selectors.
+// Current-period OHLC is built directly from chart bars for the selected
+// Week/Day/Hour target timeframe. At each real target-period boundary the
+// completed period shifts into Previous / -2 / -3 slots. No rolling-date
+// arithmetic is used. Current-period High/Low/Close develop in real time.
 
 //====================================================================
 
@@ -483,100 +593,32 @@ else
 
 //====================================================================
 
-// SUB-TIMEFRAME ATR TRACKING
+// DEFENSIVE TRUE RANGE STATISTICS
 
 //
 
-// request.security() is used only to obtain the latest 60-minute ATR stream.
-// lookahead_off prevents future 60-minute values from leaking into history.
-// On a live chart the current 60-minute ATR can still develop until that
-// 60-minute bar closes; this is intentional because the ATR bands are meant
-// to reflect current conditions rather than a frozen prior-hour reading.
-// We snapshot the stream at the same Daily boundaries used above.
+// The selected H/D/W scope is self-contained:
+//   Hour = 60-minute True Range only.
+//   Day  = Daily True Range only.
+//   Week = Weekly True Range only.
+// No sub-timeframe ATR is requested or blended. The population uses completed
+// target-timeframe bars only, so its Avg/P90/Max values are stable throughout
+// the developing current scope bar. request.security() uses lookahead_on safely
+// because get_confirmed_tr_stats() offsets True Range by one target bar.
 
 //====================================================================
 
-float sub_atr_stream = request.security(
-
-     syminfo.tickerid,
-
-     sub_tf,
-
-     ta.atr(atr_len),
-
-     barmerge.gaps_off,
-
-     barmerge.lookahead_off)
-
-var float cur_sub_atr = na
-
-var float p1_sub_atr  = na
-
-var float p2_sub_atr  = na
-
-var float p3_sub_atr  = na
-
-if barstate.isfirst
-
-    cur_sub_atr := sub_atr_stream
-
-else if new_target_period
-
-    p3_sub_atr := p2_sub_atr
-
-    p2_sub_atr := p1_sub_atr
-
-    p1_sub_atr := cur_sub_atr
-
-    cur_sub_atr := sub_atr_stream
-
-else
-
-    cur_sub_atr := sub_atr_stream
-
-//====================================================================
-
-// PRIMARY ATR
-
-//
-
-// Prior Daily ATR values are requested with fixed historical offsets.
-// lookahead_on is safe here because every requested ATR expression is offset
-// by at least one Daily bar; only already-confirmed Daily values are exposed.
-// The current Daily ATR is reconstructed from the previous confirmed ATR plus
-// the current developing Daily True Range using Wilder/RMA updating.
-// Therefore the current Daily ATR intentionally changes intraday as the day's
-// high/low range develops; no future Daily information is used.
-
-//====================================================================
-
-[target_atr_p1, target_atr_p2, target_atr_p3] = request.security(
+[range_avg_tr, range_p90_tr, range_max_tr] = request.security(
 
      syminfo.tickerid,
 
      target_tf,
 
-     [ta.atr(atr_len)[1], ta.atr(atr_len)[2], ta.atr(atr_len)[3]],
+     get_confirmed_tr_stats(active_range_lookback),
 
      barmerge.gaps_off,
 
      barmerge.lookahead_on)
-
-float cur_true_range = na(p1_close) ? (cur_high - cur_low) :
-
-     math.max(
-
-          cur_high - cur_low,
-
-          math.max(
-
-               math.abs(cur_high - p1_close),
-
-               math.abs(cur_low - p1_close)))
-
-float target_atr_current = na(target_atr_p1) ? na :
-
-     ((target_atr_p1 * (atr_len - 1)) + cur_true_range) / atr_len
 
 //====================================================================
 
@@ -644,34 +686,13 @@ int sel_start = switch period_offset
 
     => cur_start
 
-float selected_primary_atr = switch period_offset
-
-    0 => target_atr_current
-
-    1 => target_atr_p1
-
-    2 => target_atr_p2
-
-    3 => target_atr_p3
-
-    => target_atr_current
-
-float selected_sub_atr = switch period_offset
-
-    0 => cur_sub_atr
-
-    1 => p1_sub_atr
-
-    2 => p2_sub_atr
-
-    3 => p3_sub_atr
-
-    => cur_sub_atr
-
-
 //====================================================================
 
 // PROBABILITY BAND CALCULATION
+
+// These calculations are intentionally isolated from defensive range logic: they never
+// feed target_tf, period_offset, selected OHLC, or True Range statistics.
+// They only produce optional forward-looking display bands around live close.
 
 //====================================================================
 
@@ -702,7 +723,7 @@ float selected_sub_atr = switch period_offset
      barmerge.gaps_off,
      barmerge.lookahead_off)
 
-// Live close is the single center for ATR and probability bands.
+// Live close is the single center for defensive range and probability bands.
 // This is intentionally independent of Day High/Low and any prior-period value.
 float prob_anchor = close
 
@@ -780,45 +801,43 @@ var linefill fill95 = linefill.new(l_p95_hi, l_p95_lo, color.new(c_p95, fill_p95
 
 if barstate.islast
 
-    float base_atr = switch atr_calc_mode
+    float base_range = switch range_method
 
-        "Min" => math.min(selected_primary_atr, selected_sub_atr)
+        "Avg" => range_avg_tr
 
-        "Max" => math.max(selected_primary_atr, selected_sub_atr)
+        "90th Percentile" => range_p90_tr
 
-        "Avg" => math.avg(selected_primary_atr, selected_sub_atr)
+        "Max" => range_max_tr
 
-        => math.max(selected_primary_atr, selected_sub_atr)
+        => range_p90_tr
 
-    float final_atr = base_atr * atr_mult
+    float final_range = base_range * range_mult
 
     float val_l1 = get_selected_value(l1_basis, sel_open, sel_high, sel_low, sel_close)
 
     float val_l2 = get_selected_value(l2_basis, sel_open, sel_high, sel_low, sel_close)
 
-    // ATR bands are always centered on live close. The selected Day High/Low
-    // display lines do not influence the anchor. ATR/range data remains fixed
-    // to the current-Day scope described above.
+    // Defensive range bands are always centered on live close. The selected
+    // historical/current reference period affects Line 1/Line 2 only; it does
+    // not change the H/D/W range population or move the Current Price anchor.
 
     float anchor_price = close
 
     string anchor_label = "Current Price"
 
-    // Exact symmetric ATR bands.
+    // Exact symmetric defensive range bands.
 
-    float val_atr_h = anchor_price + final_atr
+    float val_range_h = anchor_price + final_range
 
-    float val_atr_l = anchor_price - final_atr
+    float val_range_l = anchor_price - final_range
 
-    string atr_component_text =
+    string range_component_text =
 
-         tf_code + "=" + str.tostring(selected_primary_atr, format.mintick) +
+         tf_code + " " + str.tostring(active_range_lookback) + " bars"
 
-         ", " + sub_tf_code + "=" + str.tostring(selected_sub_atr, format.mintick)
+    string range_mode_text =
 
-    string atr_mode_text =
-
-         atr_calc_mode + " ATR x " + str.tostring(atr_mult, "#.##")
+         range_method + " TR x " + str.tostring(range_mult, "#.##")
 
     string basis_text = ""
 
@@ -830,9 +849,9 @@ if barstate.islast
 
          (basis_text == "" ? "" : " | ") +
 
-         "ATR Used: " + str.tostring(final_atr, format.mintick) +
+         "Range Used: " + str.tostring(final_range, format.mintick) +
 
-         " [" + atr_component_text + "]"
+         " [" + range_component_text + ", " + range_method + "]"
 
     if show_price
 
@@ -853,6 +872,15 @@ if barstate.islast
         label_x_pos := int(math.avg(sel_start, timenow))
 
         label_align := text.align_center
+
+    // Current Price and defensive range lines belong to the CURRENT selected
+    // H/D/W period, regardless of which prior period Line 1/Line 2 reference.
+    int range_start = cur_start
+    int range_label_x_pos = timenow
+    if lbl_just == "Left"
+        range_label_x_pos := range_start
+    else if lbl_just == "Center"
+        range_label_x_pos := int(math.avg(range_start, timenow))
 
     // -------------------------
 
@@ -882,7 +910,7 @@ if barstate.islast
 
             label.set_xy(lbl1, label_x_pos, val_l1)
 
-            label.set_text(lbl1, get_label_text(show_desc, "Current Day " + l1_basis, show_price, val_l1))
+            label.set_text(lbl1, get_label_text(show_desc, active_select + " " + l1_basis, show_price, val_l1))
 
         else
 
@@ -924,7 +952,7 @@ if barstate.islast
 
             label.set_xy(lbl2, label_x_pos, val_l2)
 
-            label.set_text(lbl2, get_label_text(show_desc, "Current Day " + l2_basis, show_price, val_l2))
+            label.set_text(lbl2, get_label_text(show_desc, active_select + " " + l2_basis, show_price, val_l2))
 
         else
 
@@ -956,13 +984,13 @@ if barstate.islast
 
     label.set_textalign(lbl_basis, label_align)
 
-    if show_basis and not na(sel_start) and not na(anchor_price)
+    if show_basis and not na(range_start) and not na(anchor_price)
 
-        line.set_xy1(l_basis, sel_start, anchor_price)
+        line.set_xy1(l_basis, range_start, anchor_price)
 
         line.set_xy2(l_basis, timenow, anchor_price)
 
-        label.set_xy(lbl_basis, label_x_pos, anchor_price)
+        label.set_xy(lbl_basis, range_label_x_pos, anchor_price)
 
         label.set_text(lbl_basis, basis_text)
 
@@ -976,7 +1004,7 @@ if barstate.islast
 
     // -------------------------
 
-    // Upper ATR
+    // Upper defensive range
 
     // -------------------------
 
@@ -992,15 +1020,15 @@ if barstate.islast
 
     label.set_textalign(lbl3, label_align)
 
-    if show_l3 and not na(sel_start) and not na(val_atr_h)
+    if show_l3 and not na(range_start) and not na(val_range_h)
 
-        line.set_xy1(l3, sel_start, val_atr_h)
+        line.set_xy1(l3, range_start, val_range_h)
 
-        line.set_xy2(l3, timenow, val_atr_h)
+        line.set_xy2(l3, timenow, val_range_h)
 
         if show_desc or show_price
 
-            label.set_xy(lbl3, label_x_pos, val_atr_h)
+            label.set_xy(lbl3, range_label_x_pos, val_range_h)
 
             label.set_text(
 
@@ -1010,11 +1038,11 @@ if barstate.islast
 
                       show_desc,
 
-                      "ATR Upper (" + anchor_label + " + " + atr_mode_text + ")",
+                      "Range Upper (" + anchor_label + " + " + range_mode_text + ")",
 
                       show_price,
 
-                      val_atr_h))
+                      val_range_h))
 
         else
 
@@ -1030,7 +1058,7 @@ if barstate.islast
 
     // -------------------------
 
-    // Lower ATR
+    // Lower defensive range
 
     // -------------------------
 
@@ -1046,15 +1074,15 @@ if barstate.islast
 
     label.set_textalign(lbl4, label_align)
 
-    if show_l4 and not na(sel_start) and not na(val_atr_l)
+    if show_l4 and not na(range_start) and not na(val_range_l)
 
-        line.set_xy1(l4, sel_start, val_atr_l)
+        line.set_xy1(l4, range_start, val_range_l)
 
-        line.set_xy2(l4, timenow, val_atr_l)
+        line.set_xy2(l4, timenow, val_range_l)
 
         if show_desc or show_price
 
-            label.set_xy(lbl4, label_x_pos, val_atr_l)
+            label.set_xy(lbl4, range_label_x_pos, val_range_l)
 
             label.set_text(
 
@@ -1064,11 +1092,11 @@ if barstate.islast
 
                       show_desc,
 
-                      "ATR Lower (" + anchor_label + " - " + atr_mode_text + ")",
+                      "Range Lower (" + anchor_label + " - " + range_mode_text + ")",
 
                       show_price,
 
-                      val_atr_l))
+                      val_range_l))
 
         else
 
