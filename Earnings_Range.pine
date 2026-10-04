@@ -2,7 +2,7 @@
 indicator("Earnings Range", shorttitle="Earnings Range", overlay=true, max_lines_count=8, max_labels_count=4, max_boxes_count=9)
 
 // Earnings Range
-// Revision: 2026-10-03-R12
+// Revision: 2026-10-03-R13
 //
 // PURPOSE
 // - Show up to four earnings-day ranges as persistent horizontal zones.
@@ -11,19 +11,17 @@ indicator("Earnings Range", shorttitle="Earnings Range", overlay=true, max_lines
 //
 // VISUAL MODEL
 // - Range colors identify earnings cycles only; the four range colors are intentionally fixed and distinct.
-// - Historical rectangle fill encodes price direction over the same horizontal interval the rectangle displays:
-//      Full     = earnings-day close to full cycle-end close
-//      Relative = earnings-day close to the close on/before the relative rectangle end date
-//      green = interval end close >= earnings-day close
-//      red   = interval end close <  earnings-day close
-// - Historical rectangles span each earnings event through the next earnings event (latest cycle through the current calculation bar).
-// - The latest cycle is still open, so its rectangle direction uses the latest daily close
-//   and can change until the next earnings event starts.
-// - Historical rectangle height = the full high/low reached during that entire earnings cycle.
+// - Historical rectangle fill encodes price direction over the same pre-earnings interval the rectangle displays:
+//      Full     = previous earnings cycle, ending at the anchored earnings date
+//      Relative = X calendar days before the anchored earnings date, where X = next earnings date minus latest daily close-candle date
+//      green = interval end close >= interval start close
+//      red   = interval end close <  interval start close
+// - Each historical rectangle is anchored on an earnings date and is drawn backward into the preceding earnings period.
+// - Historical rectangle height = the full high/low reached during the completed earnings cycle immediately preceding the anchor date.
 // - Future rectangle height = the envelope (highest high to lowest low) of the latest four completed earnings-cycle ranges.
-// - Rectangle Length = Full uses the full earnings-cycle interval.
-// - Rectangle Length = Relative uses the current future-rectangle width (calendar days from today to next earnings) for every historical rectangle.
-// - Future rectangle width is always calendar days from today to the next earnings date.
+// - Rectangle Length = Full uses the complete preceding earnings-cycle interval.
+// - Rectangle Length = Relative uses the current future-rectangle width (calendar days from the latest daily close candle to next earnings) backward from every historical earnings anchor.
+// - Future rectangle width is always calendar days from the latest daily close candle to the next earnings date.
 //
 // TOOLTIP MODEL
 // - The visible marker at the start of each rendered range shows actual EPS only.
@@ -49,7 +47,7 @@ showRanges = input.bool(true, "Show Earnings Ranges", group=groupDisplay)
 rangeCount = input.int(4, "Range #", minval=1, maxval=4, group=groupDisplay, tooltip="Number of latest earnings-day ranges to draw. Maximum 4 to keep overlapping persistent zones readable.")
 showRectangles = input.bool(true, "Show Rectangles", group=groupDisplay)
 rectangleCount = input.int(8, "Rectangles #", minval=1, maxval=8, group=groupDisplay, tooltip="Number of historical earnings rectangles to draw. The future earnings rectangle is additional when a future earnings date is available.")
-rectangleLengthMode = input.string("Full", "Rectangle Length", options=["Full", "Relative"], group=groupDisplay, tooltip="Full: each historical rectangle spans its full earnings cycle. Relative: every historical rectangle uses the current future-rectangle width, equal to calendar days from today to the next earnings date.")
+rectangleLengthMode = input.string("Full", "Rectangle Length", options=["Full", "Relative"], group=groupDisplay, tooltip="Full: each rectangle spans the complete earnings period immediately before its anchor earnings date. Relative: each rectangle ends on its anchor earnings date and extends backward by X calendar days, where X = next earnings date minus the latest daily close-candle date.")
 
 //------------------------------------------------------------------------------
 // 2. Style
@@ -133,16 +131,15 @@ f_directionColor(float startClose, float endClose) =>
         resultColor := endClose >= startClose ? UP_COLOR : DOWN_COLOR
     resultColor
 
-// Returns the latest daily close whose bar starts on or before
-// the requested timestamp. This makes Relative rectangle color match the same
-// calendar interval displayed by the rectangle. Weekend/holiday endpoints use
-// the latest prior trading close; future endpoints use the current close.
+// Returns the latest daily close whose bar starts on or before the requested timestamp.
+// Relative rectangles use this for their left-edge comparison close. Weekend/holiday
+// targets therefore resolve to the latest prior trading close.
 f_closeAtOrBefore(int targetT) =>
     bool atOrBeforeTarget = not na(targetT) and time <= targetT
     float matchedClose = ta.valuewhen(atOrBeforeTarget, close, 0)
     not na(targetT) ? matchedClose : na
 
-f_relativeEndCloses(int target0, int target1, int target2, int target3, int target4, int target5, int target6, int target7) =>
+f_relativeStartCloses(int target0, int target1, int target2, int target3, int target4, int target5, int target6, int target7) =>
     [f_closeAtOrBefore(target0), f_closeAtOrBefore(target1), f_closeAtOrBefore(target2), f_closeAtOrBefore(target3), f_closeAtOrBefore(target4), f_closeAtOrBefore(target5), f_closeAtOrBefore(target6), f_closeAtOrBefore(target7)]
 
 //------------------------------------------------------------------------------
@@ -193,6 +190,8 @@ f_calcData() =>
     float cycleL6 = ta.valuewhen(evt, completedCycleLow, 5)
     float cycleH7 = ta.valuewhen(evt, completedCycleHigh, 6)
     float cycleL7 = ta.valuewhen(evt, completedCycleLow, 6)
+    float cycleH8 = ta.valuewhen(evt, completedCycleHigh, 7)
+    float cycleL8 = ta.valuewhen(evt, completedCycleLow, 7)
 
     float h0 = ta.valuewhen(evt, high, 0)
     float l0 = ta.valuewhen(evt, low, 0)
@@ -242,6 +241,9 @@ f_calcData() =>
     int t7 = ta.valuewhen(evt, time, 7)
     float c7 = ta.valuewhen(evt, close, 7)
 
+    int t8 = ta.valuewhen(evt, time, 8)
+    float c8 = ta.valuewhen(evt, close, 8)
+
     float endC0 = close
     int endT0 = time_close
     float endC1 = ta.valuewhen(evt, close[1], 0)
@@ -251,10 +253,11 @@ f_calcData() =>
     float endC5 = ta.valuewhen(evt, close[1], 4)
     float endC6 = ta.valuewhen(evt, close[1], 5)
     float endC7 = ta.valuewhen(evt, close[1], 6)
+    float endC8 = ta.valuewhen(evt, close[1], 7)
 
-    [h0, l0, t0, a0, e0, c0, endC0, endT0, cycleH0, cycleL0, h1, l1, t1, a1, e1, c1, endC1, cycleH1, cycleL1, h2, l2, t2, a2, e2, c2, endC2, cycleH2, cycleL2, h3, l3, t3, a3, e3, c3, endC3, cycleH3, cycleL3, h4, l4, t4, c4, endC4, cycleH4, cycleL4, h5, l5, t5, c5, endC5, cycleH5, cycleL5, h6, l6, t6, c6, endC6, cycleH6, cycleL6, h7, l7, t7, c7, endC7, cycleH7, cycleL7]
+    [h0, l0, t0, a0, e0, c0, endC0, endT0, cycleH0, cycleL0, h1, l1, t1, a1, e1, c1, endC1, cycleH1, cycleL1, h2, l2, t2, a2, e2, c2, endC2, cycleH2, cycleL2, h3, l3, t3, a3, e3, c3, endC3, cycleH3, cycleL3, h4, l4, t4, c4, endC4, cycleH4, cycleL4, h5, l5, t5, c5, endC5, cycleH5, cycleL5, h6, l6, t6, c6, endC6, cycleH6, cycleL6, h7, l7, t7, c7, endC7, cycleH7, cycleL7, t8, c8, endC8, cycleH8, cycleL8]
 
-[h0, l0, t0, a0, e0, c0, endC0, endT0, cycleH0, cycleL0, h1, l1, t1, a1, e1, c1, endC1, cycleH1, cycleL1, h2, l2, t2, a2, e2, c2, endC2, cycleH2, cycleL2, h3, l3, t3, a3, e3, c3, endC3, cycleH3, cycleL3, h4, l4, t4, c4, endC4, cycleH4, cycleL4, h5, l5, t5, c5, endC5, cycleH5, cycleL5, h6, l6, t6, c6, endC6, cycleH6, cycleL6, h7, l7, t7, c7, endC7, cycleH7, cycleL7] = request.security(syminfo.tickerid, EVENT_TF, f_calcData(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, calc_bars_count=REQ_BARS)
+[h0, l0, t0, a0, e0, c0, endC0, endT0, cycleH0, cycleL0, h1, l1, t1, a1, e1, c1, endC1, cycleH1, cycleL1, h2, l2, t2, a2, e2, c2, endC2, cycleH2, cycleL2, h3, l3, t3, a3, e3, c3, endC3, cycleH3, cycleL3, h4, l4, t4, c4, endC4, cycleH4, cycleL4, h5, l5, t5, c5, endC5, cycleH5, cycleL5, h6, l6, t6, c6, endC6, cycleH6, cycleL6, h7, l7, t7, c7, endC7, cycleH7, cycleL7, t8, c8, endC8, cycleH8, cycleL8] = request.security(syminfo.tickerid, EVENT_TF, f_calcData(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, calc_bars_count=REQ_BARS)
 
 // Drawing anchor for D+ charts. The earnings calculations above stay daily, but
 // the visible range begins at the chart candle that contains the earnings date.
@@ -272,21 +275,26 @@ int chartAnchorCloseT2 = ta.valuewhen(chartEarningsEvent, time_close, 2)
 int chartAnchorCloseT3 = ta.valuewhen(chartEarningsEvent, time_close, 3)
 
 int futureEarningsT = earnings.future_time
-int autoWidthDaysRaw = f_calendarDays(timenow, futureEarningsT)
-int autoWidthDays = not na(autoWidthDaysRaw) ? int(math.max(1, autoWidthDaysRaw)) : na
+// X is deliberately based on the latest daily close-candle date, not timenow.
+// This keeps Relative geometry identical on intraday, D, W, and M charts and
+// avoids losing a day merely because the chart is viewed on a weekend.
+int currentCloseCandleT = endT0
+int autoWidthDaysRaw = f_calendarDays(currentCloseCandleT, futureEarningsT)
+int autoWidthDays = autoWidthDaysRaw
 
-// Relative-mode direction must use the close at the same calendar endpoint as
-// the displayed rectangle, rather than the full earnings-cycle end close.
-int relativeTarget0 = rectangleLengthMode == "Relative" and not na(t0) and not na(autoWidthDays) ? t0 + autoWidthDays * DAY_MS : na
-int relativeTarget1 = rectangleLengthMode == "Relative" and not na(t1) and not na(autoWidthDays) ? t1 + autoWidthDays * DAY_MS : na
-int relativeTarget2 = rectangleLengthMode == "Relative" and not na(t2) and not na(autoWidthDays) ? t2 + autoWidthDays * DAY_MS : na
-int relativeTarget3 = rectangleLengthMode == "Relative" and not na(t3) and not na(autoWidthDays) ? t3 + autoWidthDays * DAY_MS : na
-int relativeTarget4 = rectangleLengthMode == "Relative" and not na(t4) and not na(autoWidthDays) ? t4 + autoWidthDays * DAY_MS : na
-int relativeTarget5 = rectangleLengthMode == "Relative" and not na(t5) and not na(autoWidthDays) ? t5 + autoWidthDays * DAY_MS : na
-int relativeTarget6 = rectangleLengthMode == "Relative" and not na(t6) and not na(autoWidthDays) ? t6 + autoWidthDays * DAY_MS : na
-int relativeTarget7 = rectangleLengthMode == "Relative" and not na(t7) and not na(autoWidthDays) ? t7 + autoWidthDays * DAY_MS : na
+// Relative mode reuses the future rectangle width X, but applies it backward
+// from every historical earnings anchor. Color uses the close at the left edge
+// versus the close immediately before the anchor earnings event.
+int relativeTarget0 = rectangleLengthMode == "Relative" and not na(t0) and not na(autoWidthDays) ? t0 - autoWidthDays * DAY_MS : na
+int relativeTarget1 = rectangleLengthMode == "Relative" and not na(t1) and not na(autoWidthDays) ? t1 - autoWidthDays * DAY_MS : na
+int relativeTarget2 = rectangleLengthMode == "Relative" and not na(t2) and not na(autoWidthDays) ? t2 - autoWidthDays * DAY_MS : na
+int relativeTarget3 = rectangleLengthMode == "Relative" and not na(t3) and not na(autoWidthDays) ? t3 - autoWidthDays * DAY_MS : na
+int relativeTarget4 = rectangleLengthMode == "Relative" and not na(t4) and not na(autoWidthDays) ? t4 - autoWidthDays * DAY_MS : na
+int relativeTarget5 = rectangleLengthMode == "Relative" and not na(t5) and not na(autoWidthDays) ? t5 - autoWidthDays * DAY_MS : na
+int relativeTarget6 = rectangleLengthMode == "Relative" and not na(t6) and not na(autoWidthDays) ? t6 - autoWidthDays * DAY_MS : na
+int relativeTarget7 = rectangleLengthMode == "Relative" and not na(t7) and not na(autoWidthDays) ? t7 - autoWidthDays * DAY_MS : na
 
-[relativeEndC0, relativeEndC1, relativeEndC2, relativeEndC3, relativeEndC4, relativeEndC5, relativeEndC6, relativeEndC7] = request.security(syminfo.tickerid, EVENT_TF, f_relativeEndCloses(relativeTarget0, relativeTarget1, relativeTarget2, relativeTarget3, relativeTarget4, relativeTarget5, relativeTarget6, relativeTarget7), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, calc_bars_count=REQ_BARS)
+[relativeStartC0, relativeStartC1, relativeStartC2, relativeStartC3, relativeStartC4, relativeStartC5, relativeStartC6, relativeStartC7] = request.security(syminfo.tickerid, EVENT_TF, f_relativeStartCloses(relativeTarget0, relativeTarget1, relativeTarget2, relativeTarget3, relativeTarget4, relativeTarget5, relativeTarget6, relativeTarget7), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, calc_bars_count=REQ_BARS)
 
 // The future rectangle uses the last four COMPLETED cycle ranges.
 // Excluding the still-open latest cycle keeps this forward reference stable from day to day.
@@ -370,20 +378,19 @@ f_renderRange(bool on, float top, float bot, int eventT, int drawStartT, int dra
         linefill.set_color(area, na)
         label.set_text(epsLabel, "")
 
-// Historical rectangles cover the full earnings-cycle interval.
-// Completed cycles use the next earnings timestamp as the rectangle right edge; this is
-// more robust across chart timeframes than depending on the prior bar's time_close.
-// Their red/green direction uses the close at the displayed rectangle endpoint.
-f_renderHistoricalRect(bool on, float top, float bot, int startT, int fullEndT, int relativeWidthDays, float startClose, float endClose, box bx) =>
-    int rightT = fullEndT
-    if rectangleLengthMode == "Relative" and not na(startT) and not na(relativeWidthDays)
-        rightT := startT + relativeWidthDays * DAY_MS
+// Every historical rectangle is anchored on an earnings date and extends backward.
+// Full uses the prior earnings date as the left edge. Relative uses anchor - X days,
+// where X is the current future rectangle width.
+f_renderHistoricalRect(bool on, float top, float bot, int anchorT, int fullLeftT, int relativeWidthDays, float startClose, float endClose, box bx) =>
+    int leftT = fullLeftT
+    if rectangleLengthMode == "Relative" and not na(anchorT) and not na(relativeWidthDays)
+        leftT := anchorT - relativeWidthDays * DAY_MS
 
-    bool valid = on and not na(top) and not na(bot) and not na(startT) and not na(rightT) and top > bot and rightT > startT
+    bool valid = on and not na(top) and not na(bot) and not na(leftT) and not na(anchorT) and top > bot and anchorT > leftT
     if valid
         color rectColor = f_directionColor(startClose, endClose)
-        box.set_left(bx, startT)
-        box.set_right(bx, rightT)
+        box.set_left(bx, leftT)
+        box.set_right(bx, anchorT)
         box.set_top(bx, top)
         box.set_bottom(bx, bot)
         box.set_border_color(bx, rectColor)
@@ -418,17 +425,18 @@ f_renderFutureRect(bool on, float top, float bot, int rightT, int widthDays, box
 if barstate.islast
     array<float> eventHighs = array.from(h0, h1, h2, h3, h4, h5, h6, h7)
     array<float> eventLows = array.from(l0, l1, l2, l3, l4, l5, l6, l7)
-    array<float> cycleHighs = array.from(cycleH0, cycleH1, cycleH2, cycleH3, cycleH4, cycleH5, cycleH6, cycleH7)
-    array<float> cycleLows = array.from(cycleL0, cycleL1, cycleL2, cycleL3, cycleL4, cycleL5, cycleL6, cycleL7)
     array<int> eventTimes = array.from(t0, t1, t2, t3, t4, t5, t6, t7)
     array<float> startCloses = array.from(c0, c1, c2, c3, c4, c5, c6, c7)
     array<float> endCloses = array.from(endC0, endC1, endC2, endC3, endC4, endC5, endC6, endC7)
-    array<float> relativeEndCloses = array.from(relativeEndC0, relativeEndC1, relativeEndC2, relativeEndC3, relativeEndC4, relativeEndC5, relativeEndC6, relativeEndC7)
-    // Rectangle right edges are deliberately derived from event timestamps rather
-    // than historical time_close values.  This keeps boxes stable on D+ charts.
-    // Latest/open cycle: latest daily-bar close.
-    // Completed cycle i: the next more-recent earnings event.
-    array<int> rectRightTimes = array.from(endT0, t0, t1, t2, t3, t4, t5, t6)
+
+    // Rectangle i is anchored at earnings event ti and describes the completed
+    // earnings period immediately BEFORE that anchor: t(i+1) -> ti.
+    array<float> rectCycleHighs = array.from(cycleH1, cycleH2, cycleH3, cycleH4, cycleH5, cycleH6, cycleH7, cycleH8)
+    array<float> rectCycleLows = array.from(cycleL1, cycleL2, cycleL3, cycleL4, cycleL5, cycleL6, cycleL7, cycleL8)
+    array<int> rectFullLeftTimes = array.from(t1, t2, t3, t4, t5, t6, t7, t8)
+    array<float> rectFullStartCloses = array.from(c1, c2, c3, c4, c5, c6, c7, c8)
+    array<float> rectEndCloses = array.from(endC1, endC2, endC3, endC4, endC5, endC6, endC7, endC8)
+    array<float> relativeStartCloses = array.from(relativeStartC0, relativeStartC1, relativeStartC2, relativeStartC3, relativeStartC4, relativeStartC5, relativeStartC6, relativeStartC7)
 
     array<float> actualEPS = array.from(a0, a1, a2, a3)
     array<float> estimateEPS = array.from(e0, e1, e2, e3)
@@ -457,8 +465,9 @@ if barstate.islast
 
     for i = 0 to 7
         bool rectOn = showRectangles and i < rectangleCount
-        float rectangleEndClose = rectangleLengthMode == "Relative" ? array.get(relativeEndCloses, i) : array.get(endCloses, i)
-        f_renderHistoricalRect(rectOn, array.get(cycleHighs, i), array.get(cycleLows, i), array.get(eventTimes, i), array.get(rectRightTimes, i), autoWidthDays, array.get(startCloses, i), rectangleEndClose, array.get(historicalRects, i))
+        float rectangleStartClose = rectangleLengthMode == "Relative" ? array.get(relativeStartCloses, i) : array.get(rectFullStartCloses, i)
+        float rectangleEndClose = array.get(rectEndCloses, i)
+        f_renderHistoricalRect(rectOn, array.get(rectCycleHighs, i), array.get(rectCycleLows, i), array.get(eventTimes, i), array.get(rectFullLeftTimes, i), autoWidthDays, rectangleStartClose, rectangleEndClose, array.get(historicalRects, i))
 
     bool futureRectOn = showRectangles and not na(futureEarningsT) and not na(autoWidthDays) and not na(futureTop) and not na(futureBottom)
     f_renderFutureRect(futureRectOn, futureTop, futureBottom, futureEarningsT, autoWidthDays, rectFuture)
