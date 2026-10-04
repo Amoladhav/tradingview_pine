@@ -1,8 +1,8 @@
 //@version=6
 
-// Revision: 2.8
+// Revision: 2.9
 
-indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false, max_boxes_count=500)
+indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", overlay=false)
 
 // ============================================================================
 
@@ -62,17 +62,15 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 
 //    Example: a 09:30 196m bar compares only with prior 09:30 196m bars.
 
-//    No intraday timeframe list is hardcoded and no synthetic 130m aggregation is used.
+//    No intraday timeframe list is hardcoded and no synthetic aggregation is used.
 
 //
 
-// B) Chart timeframe >=Daily:
+// B) Chart timeframe >= Daily:
 
-//    Slot identity disappears.
+//    Slot identity disappears. Each bar compares with prior bars from the same native
 
-//    Daily compares with prior Daily bars, 2D with prior 2D bars, Weekly with prior
-
-//    Weekly bars, Monthly with prior Monthly bars.
+//    chart timeframe. There is no special higher-timeframe display feature.
 
 //
 
@@ -86,17 +84,11 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 
 // Adaptive:
 
-//    Quarterly (~3 Months):
+//    Quarterly (~3 Months): intraday same-slot = 63 observations; Daily-or-higher
 
-//      intraday same-slot = 63 observations
+//    maps that horizon to the active native timeframe with a minimum statistical population.
 
-//      D=63, 2D~32, 3D~21, W~13, M minimum 12
-
-//    Structural (~6 Months):
-
-//      intraday same-slot = 126 observations
-
-//      D=126, 2D~63, 3D~42, W~26, M minimum 24
+//    Structural (~6 Months): same idea using approximately two quarterly cycles.
 
 //
 
@@ -114,72 +106,63 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 
 //
 
-// VERY-HIGH VOLUME / WEEKLY ZONES
+// SIGNAL DOTS
 
-// Very High (VH) volume is defined by the current observation's percentile rank
+// Green dot  = Efficient Rally: confirmed Directional Response >= Strong Directional threshold.
 
-// versus the same comparison population used by the indicator.
+//              Price advanced efficiently relative to participation and candle structure.
 
-// Default VH threshold = 90th percentile.
+// Red dot    = Efficient Drop: confirmed Directional Response <= negative Strong Directional threshold.
 
-//
+//              Price declined efficiently relative to participation and candle structure.
 
-// On Weekly charts only, an optional VH candle can project:
+// Orange dot = Resistant Response: confirmed Neutral Response <= Low Neutral Response threshold.
 
-//   DZ = lower tail zone: Low -> lower edge of candle body.
+//              Participation is high relative to range produced; base/resistance-like behavior.
 
-//   SZ = upper wick zone: upper edge of candle body -> High.
+// Green stays at pane top. Red and orange stay at pane bottom. Their vertical placement is
 
-// Zones are created only from confirmed Weekly VH candles and extend for the
-
-// user-selected number of Weekly bars. Zone borders/fills are display-only.
-
-//
-
-// LOWER-PANE MARKERS
-
-// Efficient Rally stays at the pane top.
-
-// Efficient Drop is positioned just below the Strong Drop threshold.
-
-// Resistant Response (orange) is positioned slightly below the red Drop dot.
-
-// Marker positioning is display-only and does not change signal conditions.
+// pane-relative, so resizing the indicator scale does not shift their visual anchor.
 
 //
 
 // ALERTS
 
-// Bullish Momentum: true when the confirmed green Efficient Rally dot appears.
+// Efficient Rally (Green Dot): confirmed green-dot condition.
 
-// Bearish Momentum: true when the confirmed red Efficient Drop dot appears.
+// Efficient Drop (Red Dot): confirmed red-dot condition.
 
-// Momentum Either side: true when either Bullish Momentum OR Bearish Momentum is true.
+// Efficient Rally or Drop (Green/Red Dot): either directional dot condition.
 
-// Base Formation: true when the confirmed orange Resistant Response dot appears.
+// Resistant Response (Orange Dot): confirmed orange-dot condition.
 
-// Body Efficiency Cross Up: true when confirmed Signed Body Efficiency crosses upward through 0.
+// Signed Body Efficiency Cross Above 0: confirmed body efficiency crosses from <=0 to >0.
 
-// Body Efficiency Cross Down: true when confirmed Signed Body Efficiency crosses downward through 0.
+// Signed Body Efficiency Cross Below 0: confirmed body efficiency crosses from >=0 to <0.
 
-// Price Response Numerical: raw Directional Response series exposed for numeric alerts.
+// Existing alert conditions are preserved; only their titles/messages are clarified.
 
-// Signed Body Efficiency Numerical: raw signed candle-body efficiency exposed for numeric alerts.
+//
 
-// Both numerical series remain independent of the named Boolean alerts and accept user-selected
-// alert operators / values directly in TradingView.
+// PINE SCREENER OUTPUTS
+
+// No chart table is required. Pine Screener consumes plot() values and alertcondition() events.
+
+// The first ten plots are intentionally screener-friendly: core numerical measures, a Ready flag,
+
+// and 1/0 flags for the green, red and orange signal dots. These plots are Data Window only,
+
+// so they do not add visible lines to the indicator pane.
+
+//
 
 // DISPLAY / ALERT CONFIRMATION
 
-// Main numerical response plots are allowed to update on the live realtime bar so the current
+// Main numerical response plots may update on the live realtime bar so the developing response
 
-// developing Daily/Weekly/etc. response remains visible before the bar closes.
+// remains visible before the bar closes. Historical bars remain stable because they are confirmed.
 
-// Historical bars remain stable because they are already confirmed.
-
-// Colored-dot signals, alerts and VH classification remain strict barstate.isconfirmed, so
-
-// live display changes do not create provisional momentum/base alerts. No clock fallback is used.
+// Colored-dot signals and named alerts require barstate.isconfirmed. No clock fallback is used.
 
 //
 
@@ -195,11 +178,11 @@ indicator("Price Response to Volume v2", shorttitle="Price Response Vol v2", ove
 
 groupLookback = "Lookback"
 
-lookbackMode = input.string("Adaptive", "Lookback Mode", options=["Fixed", "Adaptive"], group=groupLookback, tooltip="Fixed: uses exactly the same number of prior comparable observations on every supported timeframe. Use this for manual control or to reproduce an existing setup.\n\nAdaptive: automatically changes the comparison population with the active chart timeframe so intraday, Daily, multi-Day, Weekly and Monthly use comparable market horizons. Recommended for normal use.")
+lookbackMode = input.string("Adaptive", "Lookback Mode", options=["Fixed", "Adaptive"], group=groupLookback, tooltip="Fixed: uses exactly the same number of prior comparable observations on every supported timeframe. Use this for manual control or to reproduce an existing setup.\n\nAdaptive: automatically changes the comparison population with the active chart timeframe so intraday and Daily-or-higher bars use comparable market horizons. Recommended for normal use.")
 
-fixedLookbackPeriods = input.int(30, "Fixed Lookback Periods", minval=10, maxval=250, group=groupLookback, tooltip="Used ONLY when Lookback Mode = Fixed.\n\nOn intraday charts, this many prior observations are kept separately for EACH same-start-time slot.\nOn Daily it means prior Daily bars; on Weekly it means prior Weekly bars.\n\nIgnored in Adaptive mode.")
+fixedLookbackPeriods = input.int(30, "Fixed Lookback Periods", minval=10, maxval=250, group=groupLookback, tooltip="Used ONLY when Lookback Mode = Fixed.\n\nOn intraday charts, this many prior observations are kept separately for EACH same-start-time slot.\nOn Daily-or-higher charts, it means prior bars of the active chart timeframe.\n\nIgnored in Adaptive mode.")
 
-adaptiveHorizon = input.string("Quarterly (~3 Months)", "Adaptive Horizon", options=["Quarterly (~3 Months)", "Structural (~6 Months)"], group=groupLookback, tooltip="Used ONLY in Adaptive mode.\n\nQuarterly (~3 Months): approximately one earnings / quarterly institutional-flow cycle. Examples: 63 same-slot intraday observations, 63 Daily, ~32 2D, ~21 3D, ~13 Weekly. Recommended default.\n\nStructural (~6 Months): approximately two quarterly cycles. Examples: 126 same-slot intraday observations, 126 Daily, ~63 2D, ~42 3D, ~26 Weekly.\n\nMonthly uses minimum populations of 12 or 24 because 3-6 observations are too small for stable normalization.")
+adaptiveHorizon = input.string("Quarterly (~3 Months)", "Adaptive Horizon", options=["Quarterly (~3 Months)", "Structural (~6 Months)"], group=groupLookback, tooltip="Used ONLY in Adaptive mode.\n\nQuarterly (~3 Months): approximately one earnings / quarterly institutional-flow cycle. Uses 63 prior same-slot intraday observations and maps a comparable horizon to Daily-or-higher native bars. Recommended default.\n\nStructural (~6 Months): approximately two quarterly cycles using 126 prior same-slot intraday observations and a comparable Daily-or-higher horizon.\n\nVery high timeframes keep a minimum population for more stable normalization.")
 
 // ── Logic.
 
@@ -210,12 +193,6 @@ volumeBaselineMethod = input.string("Average", "Volume Baseline", options=["Aver
 lowResponseThreshold = input.float(0.75, "Low Neutral Response", minval=0.05, maxval=5.0, step=0.05, group=groupLogic, tooltip="Neutral Response at or below this value is flagged as resistant behavior: participation is large relative to the range produced.\n\nDefault 0.75 means price range expanded only 75% as much as volume did, on a normalized basis.")
 
 highDirectionalThreshold = input.float(1.25, "Strong Directional Response", minval=0.05, maxval=10.0, step=0.05, group=groupLogic, tooltip="Absolute Directional Response at or above this value is flagged as a strong Rally/Drop response.\n\nPositive values are Rally response. Negative values are Drop response.")
-
-// ── Very-high volume classification.
-
-groupVolumeState = "Volume State"
-
-vhPercentileThreshold = input.float(90.0, "VH Volume Percentile", minval=50.0, maxval=99.0, step=1.0, group=groupVolumeState, tooltip="Defines Very High (VH) volume from the same comparison population used by the indicator.\n\nDefault 90 means current volume must be at or above the 90th percentile of prior comparable volume observations.\n\nOn intraday charts the percentile is same-start-slot. On Weekly charts it is versus prior Weekly observations.")
 
 // ── Display.
 
@@ -244,34 +221,6 @@ rangeColor = input.color(color.orange, "Relative Range Color", group=groupDispla
 rvolColor = input.color(color.purple, "RVOL Color", group=groupDisplay)
 
 bodyColor = input.color(color.gray, "Body Efficiency Color", group=groupDisplay)
-
-// ── Marker placement.
-
-groupMarkers = "Markers"
-
-redDotOffset = input.float(0.35, "Red Dot Offset Below Drop Threshold", minval=0.05, maxval=5.0, step=0.05, group=groupMarkers, tooltip="Display-only spacing in response units. The red Efficient Drop dot is placed below the Strong Drop Response threshold so it does not sit on the red line. Default 0.35 gives a clearly visible separation on the normal 1.25 threshold setup.")
-
-orangeDotSpacing = input.float(0.25, "Orange Dot Spacing Below Red", minval=0.05, maxval=5.0, step=0.05, group=groupMarkers, tooltip="Display-only spacing in response units. The orange Resistant Response dot is placed below the red Efficient Drop dot. Default 0.25 keeps the two lower markers clearly separated.")
-
-// ── Weekly VH zones.
-
-groupZones = "Weekly VH Zones"
-
-showWeeklyVhZones = input.bool(false, "Show Weekly VH Zones", group=groupZones, tooltip="Weekly charts only. Draws zones from confirmed Very High (VH) volume candles.\n\nDZ uses the candle's lower tail: Low to lower body edge.\nSZ uses the candle's upper wick: upper body edge to High.\n\nThis is display-only and does not alter response calculations.")
-
-showDemandZones = input.bool(true, "Show DZ (Lower Tail)", group=groupZones)
-
-showSupplyZones = input.bool(true, "Show SZ (Upper Wick)", group=groupZones)
-
-weeklyZoneLength = input.int(8, "Zone Length (Weekly Bars)", minval=1, maxval=104, group=groupZones, tooltip="How many Weekly bars each VH zone extends to the right from the qualifying candle.")
-
-weeklyZoneLineWidth = input.int(1, "Zone Border Width", minval=1, maxval=5, group=groupZones)
-
-demandZoneColor = input.color(color.green, "DZ Border / Fill Color", group=groupZones)
-
-supplyZoneColor = input.color(color.red, "SZ Border / Fill Color", group=groupZones)
-
-weeklyZoneFillTransparency = input.int(88, "Zone Fill Transparency", minval=0, maxval=100, group=groupZones, tooltip="0 = opaque fill. 100 = fully transparent fill.")
 
 // ── Helpers.
 
@@ -629,15 +578,59 @@ else
 
 bool ready = activePopSize >= effectiveLookback
 
-// Raw numerical alert/filter sources. Keep these early in plot order so TradingView alert
-// and Pine Screener interfaces can expose them prominently. They do not depend on show/hide
-// display controls and therefore remain available even when their visual plots are hidden.
-plot(directionalResponse, title="Price Response Numerical", display=display.data_window)
-plot(bodyEfficiency, title="Signed Body Efficiency Numerical", display=display.data_window)
-
 bool confirmedObservation = barstate.isconfirmed
 
-// Display the current realtime bar as it develops; signals/alerts below still require confirmation.
+// ── Confirmed signal states.
+
+// These are shared by chart markers, alerts and Pine Screener flags.
+
+bool resistantResponse = ready and confirmedObservation and not na(neutralResponse) and neutralResponse <= lowResponseThreshold
+
+bool efficientRally = ready and confirmedObservation and not na(directionalResponse) and directionalResponse >= highDirectionalThreshold
+
+bool efficientDrop = ready and confirmedObservation and not na(directionalResponse) and directionalResponse <= -highDirectionalThreshold
+
+bool momentumEitherSide = efficientRally or efficientDrop
+
+// Signed Body Efficiency zero-cross alerts are intentionally independent of Price Response.
+
+// Evaluate cross functions on every calculation, then gate the alert state to confirmed bars.
+
+bool bodyEfficiencyCrossUpRaw = ta.crossover(bodyEfficiency, 0.0)
+
+bool bodyEfficiencyCrossDownRaw = ta.crossunder(bodyEfficiency, 0.0)
+
+bool bodyEfficiencyCrossUp = confirmedObservation and bodyEfficiencyCrossUpRaw
+
+bool bodyEfficiencyCrossDown = confirmedObservation and bodyEfficiencyCrossDownRaw
+
+// ── Pine Screener / numerical outputs.
+
+// Keep these as the first ten plot() calls. They are hidden from the pane but available in
+
+// the Data Window, numeric alerts and Pine Screener columns/filters. Signal flags are 1/0.
+
+plot(directionalResponse, title="Price Response Numerical", display=display.data_window)
+
+plot(bodyEfficiency, title="Signed Body Efficiency Numerical", display=display.data_window)
+
+plot(neutralResponse, title="Neutral Price Response Data", display=display.data_window)
+
+plot(rvol, title="RVOL Data", display=display.data_window)
+
+plot(relativeRange, title="Relative Range Data", display=display.data_window)
+
+plot(volumePercentile, title="Volume Percentile Data", display=display.data_window)
+
+plot(ready ? 1.0 : 0.0, title="Screener Ready Flag", display=display.data_window)
+
+plot(efficientRally ? 1.0 : 0.0, title="Green Dot - Efficient Rally Flag", display=display.data_window)
+
+plot(efficientDrop ? 1.0 : 0.0, title="Red Dot - Efficient Drop Flag", display=display.data_window)
+
+plot(resistantResponse ? 1.0 : 0.0, title="Orange Dot - Resistant Response Flag", display=display.data_window)
+
+// Display the current realtime bar as it develops; signals/alerts remain confirmed-only.
 
 bool displayObservation = confirmedObservation or barstate.isrealtime
 
@@ -723,94 +716,43 @@ plot(negativeDirectionalLine, title="Strong Drop Response Threshold", color=colo
 
 // ── Lower-pane markers.
 
-bool resistantResponse = ready and confirmedObservation and not na(neutralResponse) and neutralResponse <= lowResponseThreshold
+// Green = efficient rally; Red = efficient drop; Orange = resistant/base-like response.
 
-bool efficientRally = ready and confirmedObservation and not na(directionalResponse) and directionalResponse >= highDirectionalThreshold
+// location.top / location.bottom makes marker placement independent of the numeric Y-scale.
 
-bool efficientDrop = ready and confirmedObservation and not na(directionalResponse) and directionalResponse <= -highDirectionalThreshold
+plotshape(resistantResponse, title="Orange Dot - Resistant Response", style=shape.circle, location=location.bottom, color=color.orange, size=size.tiny)
 
-bool momentumEitherSide = efficientRally or efficientDrop
+plotshape(efficientRally, title="Green Dot - Efficient Rally", style=shape.circle, location=location.top, color=rallyColor, size=size.tiny)
 
-// Signed Body Efficiency zero-cross alerts are intentionally independent of Price Response.
-// Evaluate cross functions on every calculation, then gate the alert state to confirmed bars.
-// Cross Up: prior value <= 0 and confirmed current value > 0.
-// Cross Down: prior value >= 0 and confirmed current value < 0.
-bool bodyEfficiencyCrossUpRaw = ta.crossover(bodyEfficiency, 0.0)
-bool bodyEfficiencyCrossDownRaw = ta.crossunder(bodyEfficiency, 0.0)
-bool bodyEfficiencyCrossUp = confirmedObservation and bodyEfficiencyCrossUpRaw
-bool bodyEfficiencyCrossDown = confirmedObservation and bodyEfficiencyCrossDownRaw
-
-float redDotY = -highDirectionalThreshold - redDotOffset
-
-float orangeDotY = redDotY - orangeDotSpacing
-
-plotshape(resistantResponse ? orangeDotY : na, title="Resistant Response Marker", style=shape.circle, location=location.absolute, color=color.orange, size=size.tiny)
-
-plotshape(efficientRally, title="Efficient Rally Response Marker", style=shape.circle, location=location.top, color=rallyColor, size=size.tiny)
-
-plotshape(efficientDrop ? redDotY : na, title="Efficient Drop Response Marker", style=shape.circle, location=location.absolute, color=dropColor, size=size.tiny)
+plotshape(efficientDrop, title="Red Dot - Efficient Drop", style=shape.circle, location=location.bottom, color=dropColor, size=size.tiny)
 
 // ── Alerts.
 
-// Colored-dot Boolean conditions remain unchanged. The two Body Efficiency cross alerts use
-// a fixed zero level and fire only on confirmed bars. The raw Signed Body Efficiency Numerical
-// plot above remains available separately for user-selected operators and numeric thresholds.
+// Conditions are unchanged. Only titles/messages are clarified to match the chart dots and logic.
 
-alertcondition(efficientRally, title="Bullish Momentum", message="Bullish Momentum | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
+// Raw numerical plots remain separate for user-selected operators and thresholds.
 
-alertcondition(efficientDrop, title="Bearish Momentum", message="Bearish Momentum | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
+alertcondition(efficientRally, title="Efficient Rally (Green Dot)", message="Efficient Rally (Green Dot) | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
-alertcondition(momentumEitherSide, title="Momentum Either side", message="Momentum Either side | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
+alertcondition(efficientDrop, title="Efficient Drop (Red Dot)", message="Efficient Drop (Red Dot) | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
-alertcondition(resistantResponse, title="Base Formation", message="Base Formation | {{ticker}} | {{interval}} | Neutral Response={{plot(\"Neutral Price Response Data\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
+alertcondition(momentumEitherSide, title="Efficient Rally or Drop (Green/Red Dot)", message="Efficient Rally or Drop (Green/Red Dot) | {{ticker}} | {{interval}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
-alertcondition(bodyEfficiencyCrossUp, title="Body Efficiency Cross Up", message="Body Efficiency Cross Up | {{ticker}} | {{interval}} | Signed Body Efficiency={{plot(\"Signed Body Efficiency Numerical\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
+alertcondition(resistantResponse, title="Resistant Response (Orange Dot)", message="Resistant Response (Orange Dot) | {{ticker}} | {{interval}} | Neutral Response={{plot(\"Neutral Price Response Data\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
-alertcondition(bodyEfficiencyCrossDown, title="Body Efficiency Cross Down", message="Body Efficiency Cross Down | {{ticker}} | {{interval}} | Signed Body Efficiency={{plot(\"Signed Body Efficiency Numerical\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
+alertcondition(bodyEfficiencyCrossUp, title="Signed Body Efficiency Cross Above 0", message="Signed Body Efficiency Cross Above 0 | {{ticker}} | {{interval}} | Signed Body Efficiency={{plot(\"Signed Body Efficiency Numerical\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
-// ── Very-high volume classification.
-
-bool veryHighVolume = ready and confirmedObservation and not na(volumePercentile) and volumePercentile >= vhPercentileThreshold
-
-// ── Optional Weekly VH zones on the main price chart.
-
-// Confirmed Weekly bars only. No lookahead. Weekly zones do not alter alert conditions.
-
-if showWeeklyVhZones and timeframe.isweekly and veryHighVolume and barstate.isconfirmed
-
-    float bodyLow = math.min(open, close)
-
-    float bodyHigh = math.max(open, close)
-
-    int zoneRight = bar_index + weeklyZoneLength
-
-    if showDemandZones and bodyLow > low
-
-        box.new(left=bar_index, top=bodyLow, right=zoneRight, bottom=low, xloc=xloc.bar_index, border_color=demandZoneColor, border_width=weeklyZoneLineWidth, bgcolor=color.new(demandZoneColor, weeklyZoneFillTransparency), force_overlay=true)
-
-    if showSupplyZones and high > bodyHigh
-
-        box.new(left=bar_index, top=high, right=zoneRight, bottom=bodyHigh, xloc=xloc.bar_index, border_color=supplyZoneColor, border_width=weeklyZoneLineWidth, bgcolor=color.new(supplyZoneColor, weeklyZoneFillTransparency), force_overlay=true)
+alertcondition(bodyEfficiencyCrossDown, title="Signed Body Efficiency Cross Below 0", message="Signed Body Efficiency Cross Below 0 | {{ticker}} | {{interval}} | Signed Body Efficiency={{plot(\"Signed Body Efficiency Numerical\")}} | Price Response={{plot(\"Price Response Numerical\")}}")
 
 // ── Data Window.
 
-// Mode Code 1 = intraday native same-start-slot history. Mode Code 2 = Daily-or-higher native rollup.
+// Mode Code 1 = intraday native same-start-slot history. Mode Code 2 = Daily-or-higher native history.
 
 float modeCode = 2.0
 
 if chartIsIntraday
 
     modeCode := 1.0
-
-plot(relativeRange, title="Relative Range Data", display=display.data_window)
-
-plot(rvol, title="RVOL Data", display=display.data_window)
-
-plot(neutralResponse, title="Neutral Price Response Data", display=display.data_window)
-
-plot(volumePercentile, title="Volume Percentile Data", display=display.data_window)
-
-plot(veryHighVolume ? 1.0 : 0.0, title="VH Volume Flag", display=display.data_window)
 
 plot(modeCode, title="Analysis Mode Code", display=display.data_window)
 
