@@ -1,0 +1,367 @@
+//@version=6
+indicator("Adaptive Stress", shorttitle="AS", overlay=false)
+// Revision: 1.07
+// Symbol-agnostic stress engine for chart display, Pine Screener columns,
+// and watchlist alerts. No on-chart dashboard table is created; Screener output
+// comes from plot() and alertcondition() outputs.
+//
+// TIMEFRAME BEHAVIOR
+// - Intraday charts below 130 minutes use a 130-minute analysis floor.
+// - 130m and 195m charts use their native chart timeframe.
+// - Other intraday charts above 130m use their native timeframe; the intended
+//   quality-validated intraday workflow is 130m or 195m.
+// - Daily and higher charts use their native chart timeframe.
+// - Intraday lookbacks are converted to trading-day-equivalent sample counts.
+// - Intraday percentile history uses a shorter 63-trading-day default so the
+//   engine remains sensitive to the current volatility regime.
+// - Day-equivalent intraday scaling assumes a 390-minute regular session.
+// - Developing mode can change before the active analysis bar closes.
+// - Confirmed mode uses only the last completed analysis bar.
+//
+// STYLE HYGIENE
+// - Internal Screener/Data Window plots remain available to Pine Screener and
+//   alerts but are non-editable so they do not create meaningless Style controls.
+// - User-visible pane plots and reference levels retain meaningful Style controls.
+
+// ============================================================================
+// INPUTS
+
+// ============================================================================
+groupCalc = "Calculation"
+dataMode = input.string(
+     "Developing",
+     "Data Mode",
+     options=["Developing", "Confirmed"],
+     group=groupCalc,
+     tooltip="Developing uses the active analysis bar and can change before that bar closes. Confirmed uses only the last completed analysis bar for stable, non-repainting values."
+ )
+useConfirmedBar = dataMode == "Confirmed"
+wvfLookback = input.int(
+     22,
+     "WVF Highest-Close Lookback",
+     minval=2,
+     group=groupCalc,
+     tooltip="Daily and higher: number of chart bars used for the Williams VIX Fix highest-close reference. Intraday: interpreted as trading days and converted to analysis bars. With the 130m floor, 22 means about 66 analysis bars."
+ )
+atrLength = input.int(
+     14,
+     "ATR Length (analysis bars)",
+     minval=1,
+     group=groupCalc,
+     tooltip="ATR smoothing length in analysis bars on every timeframe. Intraday ATR is deliberately not converted to trading days: keeping the default at 14 analysis bars lets the local volatility estimate respond while the slower 26-day median baseline provides normalization stability."
+ )
+atrBaselineLength = input.int(
+     26,
+     "ATR% Baseline Median",
+     minval=2,
+     group=groupCalc,
+     tooltip="Daily and higher: median lookback in chart bars. Intraday: interpreted as trading days and converted to analysis bars. Median reduces distortion from isolated volatility spikes."
+ )
+percentileLookback = input.int(
+     156,
+     "Percentile Lookback (D+ bars)",
+     minval=20,
+     maxval=400,
+     group=groupCalc,
+     tooltip="Historical population used to rank normalized stress and stress velocity on Daily and higher chart timeframes. On a weekly chart, 156 bars is about three years."
+ )
+intradayPercentileDays = input.int(
+     63,
+     "Intraday Percentile History (trading days)",
+     minval=26,
+     maxval=126,
+     group=groupCalc,
+     tooltip="Intraday-only percentile history. 63 trading days is about one quarter: long enough for a stable percentile population while short enough to adapt when the volatility regime changes. At 130m this is about 189 analysis bars; at 195m about 126."
+ )
+// Fixed percentile-zone boundaries used by both alerts and Screener outputs.
+// DZ is entered above 95%ile; SZ is entered below 5%ile.
+const float dzPercentileThreshold = 95.0
+const float szPercentileThreshold = 5.0
+groupDisplay = "Display"
+showVelocity = input.bool(
+     true,
+     "Show Velocity %ile",
+     group=groupDisplay,
+     tooltip="Shows the adaptive percentile rank of stress velocity in the indicator pane."
+ )
+showSignalMarkers = input.bool(
+     true,
+     "Show Signal Markers",
+     group=groupDisplay,
+     tooltip="Shows markers when Stress %ile enters DZ, leaves DZ into Uptrend, enters SZ, or leaves SZ into Downtrend."
+ )
+showZoneBackground = input.bool(
+     true,
+     "Shade DZ / SZ State",
+     group=groupDisplay,
+     tooltip="Lightly shades the pane while Stress %ile is inside DZ (>95) or SZ (<5)."
+ )
+stressColor = input.color(color.aqua, "Stress %ile Color", group=groupDisplay)
+velocityColor = input.color(color.orange, "Stress Velocity %ile Color", group=groupDisplay)
+dzColor = input.color(color.lime, "DZ / Uptrend Color", group=groupDisplay)
+szColor = input.color(color.red, "SZ / Downtrend Color", group=groupDisplay)
+neutralColor = input.color(color.gray, "Neutral Color", group=groupDisplay)
+
+// ============================================================================
+// ADAPTIVE TIMEFRAME AND LOOKBACK ENGINE
+
+// ============================================================================
+// 130m is the quality floor for intraday analysis.
+// 26m / 39m / 79m charts therefore read the same 130m stress engine.
+// 130m charts use native 130m calculations.
+// 195m charts use native 195m calculations.
+int intradayFloorSeconds = 130 * 60
+float chartSeconds = timeframe.in_seconds()
+bool useIntradayFloor = timeframe.isintraday and chartSeconds < intradayFloorSeconds
+string analysisTimeframe = timeframe.period
+if useIntradayFloor
+    analysisTimeframe := "130"
+// Convert the user's day-based intraday settings into a comparable number of
+// analysis bars. The intended U.S. equity workflow uses a 390-minute regular
+// session: 130m = 3 bars/day and 195m = 2 bars/day.
+int intradayBarsPerDay = 1
+if timeframe.isintraday
+    float analysisMinutes = timeframe.in_seconds(analysisTimeframe) / 60.0
+    intradayBarsPerDay := math.max(1, int(math.round(390.0 / analysisMinutes)))
+int effectiveWvfLookback = wvfLookback
+int effectiveAtrLength = atrLength
+int effectiveAtrBaselineLength = atrBaselineLength
+int effectivePercentileLookback = percentileLookback
+if timeframe.isintraday
+    effectiveWvfLookback := math.max(2, wvfLookback * intradayBarsPerDay)
+    effectiveAtrLength := atrLength
+    effectiveAtrBaselineLength := math.max(2, atrBaselineLength * intradayBarsPerDay)
+    effectivePercentileLookback := math.max(20, intradayPercentileDays * intradayBarsPerDay)
+
+// ============================================================================
+// STRESS CALCULATION ENGINE
+
+// ============================================================================
+f_stressMetrics(bool returnPreviousBar) =>
+    float highestClose = ta.highest(close, effectiveWvfLookback)
+    float wvf = not na(highestClose) and highestClose != 0.0 ? ((highestClose - low) / highestClose) * 100.0 : na
+    float atrValue = ta.atr(effectiveAtrLength)
+    float atrPercent = not na(close) and close != 0.0 ? (atrValue / close) * 100.0 : na
+    float baselineAtrPercent = ta.median(atrPercent, effectiveAtrBaselineLength)
+    float normalizedStress = not na(baselineAtrPercent) and baselineAtrPercent > 0.0 ? wvf / baselineAtrPercent : na
+    float stressPercentile = ta.percentrank(normalizedStress, effectivePercentileLookback)
+    float stressVelocity = normalizedStress - normalizedStress[1]
+    float stressVelocityPercentile = ta.percentrank(stressVelocity, effectivePercentileLookback)
+
+    bool inDzState = not na(stressPercentile) and stressPercentile > dzPercentileThreshold
+    bool inSzState = not na(stressPercentile) and stressPercentile < szPercentileThreshold
+
+    bool enterDzEvent = ta.crossover(stressPercentile, dzPercentileThreshold)
+    bool leaveDzUptrendEvent = ta.crossunder(stressPercentile, dzPercentileThreshold)
+    bool enterSzEvent = ta.crossunder(stressPercentile, szPercentileThreshold)
+    bool leaveSzDowntrendEvent = ta.crossover(stressPercentile, szPercentileThreshold)
+
+    float outputStressPercentile = returnPreviousBar ? stressPercentile[1] : stressPercentile
+    float outputNormalizedStress = returnPreviousBar ? normalizedStress[1] : normalizedStress
+    float outputStressVelocityPercentile = returnPreviousBar ? stressVelocityPercentile[1] : stressVelocityPercentile
+    float outputStressVelocity = returnPreviousBar ? stressVelocity[1] : stressVelocity
+    float outputWvf = returnPreviousBar ? wvf[1] : wvf
+    float outputBaselineAtrPercent = returnPreviousBar ? baselineAtrPercent[1] : baselineAtrPercent
+    bool outputInDzState = returnPreviousBar ? inDzState[1] : inDzState
+    bool outputInSzState = returnPreviousBar ? inSzState[1] : inSzState
+    bool outputEnterDzEvent = returnPreviousBar ? enterDzEvent[1] : enterDzEvent
+    bool outputLeaveDzUptrendEvent = returnPreviousBar ? leaveDzUptrendEvent[1] : leaveDzUptrendEvent
+    bool outputEnterSzEvent = returnPreviousBar ? enterSzEvent[1] : enterSzEvent
+    bool outputLeaveSzDowntrendEvent = returnPreviousBar ? leaveSzDowntrendEvent[1] : leaveSzDowntrendEvent
+    [outputStressPercentile, outputNormalizedStress, outputStressVelocityPercentile, outputStressVelocity, outputWvf, outputBaselineAtrPercent, outputInDzState, outputInSzState, outputEnterDzEvent, outputLeaveDzUptrendEvent, outputEnterSzEvent, outputLeaveSzDowntrendEvent]
+
+[developingStressPercentile, developingNormalizedStress, developingStressVelocityPercentile, developingStressVelocity, developingWvf, developingBaselineAtrPercent, developingInDzState, developingInSzState, developingEnterDzEvent, developingLeaveDzUptrendEvent, developingEnterSzEvent, developingLeaveSzDowntrendEvent] = request.security(
+     syminfo.tickerid,
+     analysisTimeframe,
+     f_stressMetrics(false),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+ )
+[confirmedStressPercentile, confirmedNormalizedStress, confirmedStressVelocityPercentile, confirmedStressVelocity, confirmedWvf, confirmedBaselineAtrPercent, confirmedInDzState, confirmedInSzState, confirmedEnterDzEventRaw, confirmedLeaveDzUptrendEventRaw, confirmedEnterSzEventRaw, confirmedLeaveSzDowntrendEventRaw] = request.security(
+     syminfo.tickerid,
+     analysisTimeframe,
+     f_stressMetrics(true),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_on
+ )
+float stressPercentile = useConfirmedBar ? confirmedStressPercentile : developingStressPercentile
+float normalizedStress = useConfirmedBar ? confirmedNormalizedStress : developingNormalizedStress
+float stressVelocityPercentile = useConfirmedBar ? confirmedStressVelocityPercentile : developingStressVelocityPercentile
+float stressVelocity = useConfirmedBar ? confirmedStressVelocity : developingStressVelocity
+float wvf = useConfirmedBar ? confirmedWvf : developingWvf
+float baselineAtrPercent = useConfirmedBar ? confirmedBaselineAtrPercent : developingBaselineAtrPercent
+bool inDzState = useConfirmedBar ? confirmedInDzState : developingInDzState
+bool inSzState = useConfirmedBar ? confirmedInSzState : developingInSzState
+
+bool isNewAnalysisPeriod = timeframe.change(analysisTimeframe)
+bool enterDzEvent = developingEnterDzEvent
+bool leaveDzUptrendEvent = developingLeaveDzUptrendEvent
+bool enterSzEvent = developingEnterSzEvent
+bool leaveSzDowntrendEvent = developingLeaveSzDowntrendEvent
+if useConfirmedBar
+    enterDzEvent := confirmedEnterDzEventRaw and isNewAnalysisPeriod
+    leaveDzUptrendEvent := confirmedLeaveDzUptrendEventRaw and isNewAnalysisPeriod
+    enterSzEvent := confirmedEnterSzEventRaw and isNewAnalysisPeriod
+    leaveSzDowntrendEvent := confirmedLeaveSzDowntrendEventRaw and isNewAnalysisPeriod
+
+// ============================================================================
+// FIRST 10 PLOTS = PINE SCREENER COLUMNS
+// Keep these first and in this order. Internal/output-only plots are non-editable
+// so they remain available to Screener/Data Window without cluttering Style.
+
+// ============================================================================
+plot(
+     stressPercentile,
+     "Stress %ile",
+     color=stressColor,
+     linewidth=2,
+     display=display.pane + display.data_window + display.pine_screener
+ )
+plot(
+     normalizedStress,
+     "Normalized Stress",
+     color=stressColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     stressVelocityPercentile,
+     "Stress Velocity %ile",
+     color=velocityColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     stressVelocity,
+     "Stress Velocity",
+     color=velocityColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     wvf,
+     "WVF",
+     color=neutralColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     baselineAtrPercent,
+     "Baseline ATR %",
+     color=neutralColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     enterDzEvent ? 1.0 : 0.0,
+     "@DZ (>95%ile)",
+     color=dzColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     leaveDzUptrendEvent ? 1.0 : 0.0,
+     "Leaving DZ — Uptrend",
+     color=dzColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     enterSzEvent ? 1.0 : 0.0,
+     "@SZ (<5%ile)",
+     color=szColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+plot(
+     leaveSzDowntrendEvent ? 1.0 : 0.0,
+     "Leaving SZ — Downtrend",
+     color=szColor,
+     display=display.data_window + display.pine_screener,
+     editable=false
+ )
+// ============================================================================
+// CHART REFERENCE LEVELS AND SIGNAL DISPLAY
+
+// ============================================================================
+// Visible velocity line is deliberately separate from the first ten Screener
+// plots so Show Velocity cannot blank the Pine Screener column.
+plot(
+     showVelocity ? stressVelocityPercentile : na,
+     "Stress Velocity %ile - Chart",
+     color=velocityColor,
+     linewidth=1,
+     display=display.pane
+ )
+hline(dzPercentileThreshold, "DZ Threshold (95%ile)", color=color.new(dzColor, 25), linestyle=hline.style_dotted)
+hline(szPercentileThreshold, "SZ Threshold (5%ile)", color=color.new(szColor, 25), linestyle=hline.style_dotted)
+
+plotshape(
+     showSignalMarkers and enterDzEvent,
+     title="@DZ Marker",
+     style=shape.circle,
+     location=location.top,
+     color=dzColor,
+     size=size.tiny,
+     text="DZ"
+ )
+plotshape(
+     showSignalMarkers and leaveDzUptrendEvent,
+     title="Leaving DZ — Uptrend Marker",
+     style=shape.triangleup,
+     location=location.top,
+     color=dzColor,
+     size=size.small,
+     text="UP"
+ )
+plotshape(
+     showSignalMarkers and enterSzEvent,
+     title="@SZ Marker",
+     style=shape.circle,
+     location=location.bottom,
+     color=szColor,
+     size=size.tiny,
+     text="SZ"
+ )
+plotshape(
+     showSignalMarkers and leaveSzDowntrendEvent,
+     title="Leaving SZ — Downtrend Marker",
+     style=shape.triangledown,
+     location=location.bottom,
+     color=szColor,
+     size=size.small,
+     text="DN"
+ )
+
+color zoneBackground = na
+if showZoneBackground
+    if inDzState
+        zoneBackground := color.new(dzColor, 93)
+    else if inSzState
+        zoneBackground := color.new(szColor, 93)
+bgcolor(zoneBackground, title="Adaptive Stress Zone State", editable=false)
+
+// ============================================================================
+// ALERTS
+// Fixed zone-crossing events. Alert names and logic match the chart terminology.
+// ============================================================================
+alertcondition(
+     enterDzEvent,
+     title="@DZ (>95%ile)",
+     message="@DZ on {{ticker}}: Stress %ile crossed up through 95 and entered DZ. Stress %ile={{plot(\"Stress %ile\")}}."
+ )
+alertcondition(
+     leaveDzUptrendEvent,
+     title="Leaving DZ — Uptrend",
+     message="Leaving DZ — Uptrend on {{ticker}}: Stress %ile crossed down through 95, leaving DZ and forming Uptrend. Stress %ile={{plot(\"Stress %ile\")}}."
+ )
+alertcondition(
+     enterSzEvent,
+     title="@SZ (<5%ile)",
+     message="@SZ on {{ticker}}: Stress %ile crossed down through 5 and entered SZ. Stress %ile={{plot(\"Stress %ile\")}}."
+ )
+alertcondition(
+     leaveSzDowntrendEvent,
+     title="Leaving SZ — Downtrend",
+     message="Leaving SZ — Downtrend on {{ticker}}: Stress %ile crossed up through 5, leaving SZ and forming Downtrend. Stress %ile={{plot(\"Stress %ile\")}}."
+ )
