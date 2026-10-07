@@ -1,0 +1,169 @@
+//@version=6
+indicator("ATR Values", shorttitle = "ATR Values", overlay = true)
+
+// Revision: 1.00
+// ============================================================================
+// PURPOSE
+// Displays selected ATR values as numbers in a fixed chart corner.
+// No ATR lines are plotted.
+//
+// CALCULATION
+// - Daily ATR uses daily bars with an independently configurable lookback.
+// - Weekly ATR uses weekly bars with an independently configurable lookback.
+// - Long Daily ATR uses daily bars and defaults to 21 periods.
+// - request.security() uses gaps_off and lookahead_off. No future values are used.
+// - On realtime bars, higher-timeframe ATR values can update while the current
+//   daily or weekly bar is still developing.
+// ============================================================================
+
+string GROUP_DISPLAY = "Display"
+string GROUP_DAILY = "Daily ATR"
+string GROUP_WEEKLY = "Weekly ATR"
+string GROUP_LONG_DAILY = "Long Daily ATR"
+
+// ── Display
+string tablePosition = input.string(
+     defval = position.bottom_left,
+     title = "Table position",
+     options = [position.top_left, position.top_right, position.bottom_left, position.bottom_right],
+     tooltip = "Selects the corner where ATR values are displayed.",
+     group = GROUP_DISPLAY)
+
+// ── Daily ATR
+bool showDailyAtr = input.bool(
+     defval = true,
+     title = "Show Daily ATR",
+     tooltip = "Shows ATR calculated from daily bars.",
+     group = GROUP_DAILY)
+
+int dailyAtrLength = input.int(
+     defval = 14,
+     title = "Daily lookback",
+     minval = 1,
+     tooltip = "Number of daily bars used for the Daily ATR calculation.",
+     group = GROUP_DAILY)
+
+// ── Weekly ATR
+bool showWeeklyAtr = input.bool(
+     defval = true,
+     title = "Show Weekly ATR",
+     tooltip = "Shows ATR calculated from weekly bars.",
+     group = GROUP_WEEKLY)
+
+int weeklyAtrLength = input.int(
+     defval = 14,
+     title = "Weekly lookback",
+     minval = 1,
+     tooltip = "Number of weekly bars used for the Weekly ATR calculation.",
+     group = GROUP_WEEKLY)
+
+// ── Long Daily ATR
+bool showLongDailyAtr = input.bool(
+     defval = true,
+     title = "Show Long Daily ATR",
+     tooltip = "Shows a second ATR calculated from daily bars. The default 21-bar lookback represents approximately one trading month.",
+     group = GROUP_LONG_DAILY)
+
+int longDailyAtrLength = input.int(
+     defval = 21,
+     title = "Long daily lookback",
+     minval = 1,
+     tooltip = "Number of daily bars used for the longer Daily ATR calculation.",
+     group = GROUP_LONG_DAILY)
+
+// ── Native-timeframe ATR calculations
+float dailyAtr = request.security(
+     symbol = syminfo.tickerid,
+     timeframe = "D",
+     expression = ta.atr(dailyAtrLength),
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+float weeklyAtr = request.security(
+     symbol = syminfo.tickerid,
+     timeframe = "W",
+     expression = ta.atr(weeklyAtrLength),
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+float longDailyAtr = request.security(
+     symbol = syminfo.tickerid,
+     timeframe = "D",
+     expression = ta.atr(longDailyAtrLength),
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+// ── Fixed-corner numerical display
+var table atrTable = table.new(
+     position = tablePosition,
+     columns = 2,
+     rows = 3,
+     frame_color = color.new(chart.fg_color, 70),
+     frame_width = 1,
+     border_width = 0)
+
+if barstate.islast
+    table.clear(
+         table_id = atrTable,
+         start_column = 0,
+         start_row = 0,
+         end_column = 1,
+         end_row = 2)
+
+    int row = 0
+
+    if showDailyAtr
+        table.cell(
+             table_id = atrTable,
+             column = 0,
+             row = row,
+             text = "ATR " + str.tostring(dailyAtrLength) + "D",
+             text_color = chart.fg_color,
+             text_halign = text.align_left,
+             bgcolor = color.new(chart.bg_color, 10))
+        table.cell(
+             table_id = atrTable,
+             column = 1,
+             row = row,
+             text = str.tostring(dailyAtr, format.mintick),
+             text_color = chart.fg_color,
+             text_halign = text.align_right,
+             bgcolor = color.new(chart.bg_color, 10))
+        row += 1
+
+    if showWeeklyAtr
+        table.cell(
+             table_id = atrTable,
+             column = 0,
+             row = row,
+             text = "ATR " + str.tostring(weeklyAtrLength) + "W",
+             text_color = chart.fg_color,
+             text_halign = text.align_left,
+             bgcolor = color.new(chart.bg_color, 10))
+        table.cell(
+             table_id = atrTable,
+             column = 1,
+             row = row,
+             text = str.tostring(weeklyAtr, format.mintick),
+             text_color = chart.fg_color,
+             text_halign = text.align_right,
+             bgcolor = color.new(chart.bg_color, 10))
+        row += 1
+
+    if showLongDailyAtr
+        table.cell(
+             table_id = atrTable,
+             column = 0,
+             row = row,
+             text = "ATR " + str.tostring(longDailyAtrLength) + "D",
+             text_color = chart.fg_color,
+             text_halign = text.align_left,
+             bgcolor = color.new(chart.bg_color, 10))
+        table.cell(
+             table_id = atrTable,
+             column = 1,
+             row = row,
+             text = str.tostring(longDailyAtr, format.mintick),
+             text_color = chart.fg_color,
+             text_halign = text.align_right,
+             bgcolor = color.new(chart.bg_color, 10))
