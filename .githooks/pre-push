@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+repo_root=$(git rev-parse --show-toplevel)
+# Cleanup only: never stage, commit, or rewrite history during a push.
+exec sh "$repo_root/.githooks/clean_identifiers.sh"

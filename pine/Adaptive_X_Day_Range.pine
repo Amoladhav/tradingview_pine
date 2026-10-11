@@ -1,0 +1,179 @@
+//@version=6
+indicator("Adaptive X-Day Range V1 [Validation]",shorttitle="Adaptive Range V1",overlay=true,max_lines_count=30,max_labels_count=30)
+// ============================================================================
+// V1 RESEARCH SUMMARY
+// Target = likely price AT endpoint. Touch = likely max/min BEFORE endpoint.
+// Historical quantiles, NOT guarantees or option probability-of-profit.
+//
+// DAILY PRE-2023 CALIBRATION (ATR21 units; each cell P90 / P95)
+// +------+-------------+------------+------------+-----------+
+// | Days | Target High | Target Low | Touch High | Touch Low |
+// +------+-------------+------------+------------+-----------+
+// |  1   | .87 / 1.16  | .82 / 1.17|1.15 / 1.45 |1.16 / 1.52|
+// |  5   |2.06 / 2.71  |1.89 / 2.68|2.67 / 3.32 |2.71 / 3.51|
+// | 10   |3.07 / 3.97  |2.66 / 3.84|3.89 / 4.81 |3.86 / 5.02|
+// | 20   |4.57 / 5.87  |3.64 / 5.32|5.73 / 7.04 |5.38 / 7.13|
+// | 40   |6.81 / 8.66  |4.74 / 7.31|8.52 /10.39 |7.51 /10.31|
+// | 60   |8.53 /10.83  |5.51 / 8.45|10.69/13.18 |9.17 /12.95|
+// +------+-------------+------------+------------+-----------+
+// DAILY UNSEEN P90 TEST
+// +------+-------------+------------+------------+-----------+
+// | Days | Target High | Target Low | Touch High | Touch Low |
+// +------+-------------+------------+------------+-----------+
+// |  1   |90.0%|90.0%|90.1%|90.2%|   5 |89.8%|90.2%|89.9%|90.8%|
+// | 10   |90.1%|90.2%|89.9%|91.0%|  20 |89.8%|90.2%|89.7%|91.1%|
+// | 40   |89.4%|90.2%|89.4%|91.2%|  60 |89.3%|90.9%|89.3%|91.7%|
+// +------+-------------+------------+------------+-----------+
+// 2020 warning: 40-60D Touch Low success fell to ~82.6-83.0%.
+//
+// 0DTE UNSEEN 2026 P90 TEST - 20 instruments
+// +-----------+-------------+------------+------------+-----------+
+// | Hours Rem | Target High | Target Low | Touch High | Touch Low |
+// +-----------+-------------+------------+------------+-----------+
+// | .5 |91.1%|91.5%|91.1%|91.9%| 1.5|91.2%|90.5%|90.5%|91.7%|
+// |2.5 |90.9%|90.3%|90.9%|91.9%| 3.5|91.1%|90.7%|91.2%|91.5%|
+// |4.5 |91.3%|90.9%|89.7%|91.1%| 5.5|89.4%|91.7%|89.1%|92.0%|
+// +-----------+-------------+------------+------------+-----------+
+// SOXL 5.5h: Target High ~84.5%, Touch High ~88.7%.
+// Friday was NOT special; no weekday factor.
+// REJECTED V1 complexity: universal downside bias, DTE buckets, aggressive
+// recency weighting, large candle/gap/volume state model, boosted quantile ML,
+// ticker constants, mandatory earnings/IV, first-hour/gap rules.
+// ============================================================================
+gM="Model"
+mode=input.string("Days Forward","Forecast Mode",options=["Days Forward","0DTE"],group=gM)
+days=input.int(5,"Days Forward",1,60,group=gM)
+conf=input.string("90%","Confidence",options=["90%","95%"],group=gM)
+showTarget=input.bool(true,"Show Target Range",group=gM)
+showTouch=input.bool(true,"Show Touch Range",group=gM)
+gA="Start Point"
+anchorMode=input.string("Live","Anchor",options=["Live","Historical"],group=gA)
+histTime=input.time(timestamp("America/New_York",2025,1,2,16,0),"Historical Date / Time",confirm=true,group=gA)
+gR="Reference"
+showRef=input.bool(false,"Show Target Price / Strike",group=gR)
+refPrice=input.float(0,"Target Price / Strike",minval=0,step=.01,group=gR)
+gV="Visual"
+cTH=input.color(color.green,"Target High",group=gV)
+cTL=input.color(color.red,"Target Low",group=gV)
+cXH=input.color(color.new(color.green,45),"Touch High",group=gV)
+cXL=input.color(color.new(color.red,45),"Touch Low",group=gV)
+cST=input.color(color.new(color.gray,25),"Start",group=gV)
+cRF=input.color(color.orange,"Strike",group=gV)
+lw=input.int(2,"Line Width",1,4,group=gV)
+showLabels=input.bool(true,"Show Labels",group=gV)
+showTable=input.bool(true,"Show Info Table",group=gV)
+fDaily(float x,string w,bool p95)=>
+    float v=na
+    if not p95
+        v:=w=="TH"?0.838349*math.pow(x,.567170):w=="TL"?0.874986*math.pow(x,.556500)-.050415*x:w=="XH"?1.102304*math.pow(x,.552941):1.209172*math.pow(x,.496688)
+    else
+        v:=w=="TH"?1.117063*math.pow(x,.553853):w=="TL"?1.215972*math.pow(x,.561500)-.059978*x:w=="XH"?1.403891*math.pow(x,.497000)+.040150*x:1.515150*math.pow(x,.520210)
+    math.max(v,0)
+fI(float h,float a,float b,float c,float d,float e,float f)=>
+    float x=math.max(.5,math.min(5.5,h))
+    x<=1.5?a+(b-a)*(x-.5):x<=2.5?b+(c-b)*(x-1.5):x<=3.5?c+(d-c)*(x-2.5):x<=4.5?d+(e-d)*(x-3.5):e+(f-e)*(x-4.5)
+fIntra(float h,string w,bool p95)=>
+    float v=na
+    if not p95
+        v:=w=="TH"?fI(h,.5293,.7517,.9436,1.1047,1.2882,1.4883):w=="TL"?fI(h,.5112,.7447,.9084,1.1263,1.3152,1.6058):w=="XH"?fI(h,.7050,.9947,1.2612,1.5046,1.7325,2.0623):fI(h,.7001,1.0564,1.3848,1.6782,1.9293,2.3846)
+    else
+        v:=w=="TH"?fI(h,.7173,1.0150,1.2641,1.5151,1.6870,2.0214):w=="TL"?fI(h,.7243,1.0072,1.2976,1.6384,1.8241,2.2385):w=="XH"?fI(h,.8817,1.2796,1.6243,1.9295,2.1669,2.5519):fI(h,.9110,1.3652,1.7778,2.1543,2.4895,3.0226)
+    v
+fDL(line x)=>
+    if not na(x)
+        line.delete(x)
+fDB(label x)=>
+    if not na(x)
+        label.delete(x)
+atrD=request.security(syminfo.tickerid,"D",ta.atr(21),lookahead=barmerge.lookahead_off)
+atrDP=request.security(syminfo.tickerid,"D",ta.atr(21)[1],lookahead=barmerge.lookahead_off)
+atrH=request.security(syminfo.tickerid,"60",ta.sma(ta.tr(true),20),lookahead=barmerge.lookahead_off)
+var float frozenP=na
+var float frozenAtr=na
+var int frozenBar=na
+crossHist=time>=histTime and (na(time[1]) or time[1]<histTime)
+if mode=="Days Forward" and anchorMode=="Historical" and crossHist and na(frozenP)
+    frozenP:=close
+    frozenAtr:=timeframe.isintraday?atrDP:atrD
+    frozenBar:=bar_index
+hh=hour(time_close,"America/New_York")
+mm=minute(time_close,"America/New_York")
+hRem=16.0-(hh+mm/60.0)
+inSession=hRem>=.5 and hRem<=5.5
+p95=conf=="95%"
+isDaily=mode=="Days Forward"
+isHist=anchorMode=="Historical"
+validHist=not isHist or not na(frozenP)
+valid0=mode=="0DTE" and anchorMode=="Live" and timeframe.isintraday and inSession
+valid=isDaily?validHist:valid0
+baseP=isDaily?(isHist?frozenP:close):close
+baseAtr=isDaily?(isHist?frozenAtr:atrD):atrH
+mTH=isDaily?fDaily(days,"TH",p95):fIntra(hRem,"TH",p95)
+mTL=isDaily?fDaily(days,"TL",p95):fIntra(hRem,"TL",p95)
+mXH=isDaily?fDaily(days,"XH",p95):fIntra(hRem,"XH",p95)
+mXL=isDaily?fDaily(days,"XL",p95):fIntra(hRem,"XL",p95)
+th=valid?baseP+baseAtr*mTH:na
+tl=valid?baseP-baseAtr*mTL:na
+xh=valid?baseP+baseAtr*mXH:na
+xl=valid?baseP-baseAtr*mXL:na
+var line lTH=na
+var line lTL=na
+var line lXH=na
+var line lXL=na
+var line lST=na
+var line lRF=na
+var label bTH=na
+var label bTL=na
+var label bXH=na
+var label bXL=na
+if barstate.islast
+    fDL(lTH)
+    fDL(lTL)
+    fDL(lXH)
+    fDL(lXL)
+    fDL(lST)
+    fDL(lRF)
+    fDB(bTH)
+    fDB(bTL)
+    fDB(bXH)
+    fDB(bXL)
+    int x1=isDaily and isHist and not na(frozenBar)?frozenBar:bar_index
+    int x2=bar_index+25
+    if valid and not na(baseAtr)
+        lST:=line.new(x1,baseP,x2,baseP,extend=extend.right,color=cST,style=line.style_dotted)
+        if showTarget
+            lTH:=line.new(x1,th,x2,th,extend=extend.right,color=cTH,width=lw)
+            lTL:=line.new(x1,tl,x2,tl,extend=extend.right,color=cTL,width=lw)
+        if showTouch
+            lXH:=line.new(x1,xh,x2,xh,extend=extend.right,color=cXH,width=lw,style=line.style_dashed)
+            lXL:=line.new(x1,xl,x2,xl,extend=extend.right,color=cXL,width=lw,style=line.style_dashed)
+        if showRef and refPrice>0
+            lRF:=line.new(x1,refPrice,x2,refPrice,extend=extend.right,color=cRF,style=line.style_dotted)
+        if showLabels
+            if showTarget
+                bTH:=label.new(bar_index,th,"Target High  "+str.tostring(th,format.mintick),style=label.style_label_left,textcolor=cTH,color=color.new(color.black,100))
+                bTL:=label.new(bar_index,tl,"Target Low   "+str.tostring(tl,format.mintick),style=label.style_label_left,textcolor=cTL,color=color.new(color.black,100))
+            if showTouch
+                bXH:=label.new(bar_index,xh,"Touch High   "+str.tostring(xh,format.mintick),style=label.style_label_left,textcolor=cXH,color=color.new(color.black,100))
+                bXL:=label.new(bar_index,xl,"Touch Low    "+str.tostring(xl,format.mintick),style=label.style_label_left,textcolor=cXL,color=color.new(color.black,100))
+var table t=table.new(position.top_right,2,8,border_width=1)
+if barstate.islast
+    table.clear(t,0,0,1,7)
+    if showTable
+        table.cell(t,0,0,"Adaptive Range V1",text_color=color.white,bgcolor=color.new(color.gray,65))
+        table.cell(t,1,0,conf,text_color=color.white,bgcolor=color.new(color.gray,65))
+        table.cell(t,0,1,"Mode")
+        table.cell(t,1,1,mode)
+        table.cell(t,0,2,isDaily?"Days":"Hours rem")
+        table.cell(t,1,2,isDaily?str.tostring(days):str.tostring(hRem,"#.##"))
+        table.cell(t,0,3,"Target High")
+        table.cell(t,1,3,valid?str.tostring(th,format.mintick):"N/A")
+        table.cell(t,0,4,"Target Low")
+        table.cell(t,1,4,valid?str.tostring(tl,format.mintick):"N/A")
+        table.cell(t,0,5,"Touch High")
+        table.cell(t,1,5,valid?str.tostring(xh,format.mintick):"N/A")
+        table.cell(t,0,6,"Touch Low")
+        table.cell(t,1,6,valid?str.tostring(xl,format.mintick):"N/A")
+        string note=mode=="0DTE" and anchorMode=="Historical"?"0DTE: Live only":mode=="0DTE" and not timeframe.isintraday?"Use intraday chart":mode=="0DTE" and not inSession?"Validated .5-5.5h":"Validation prototype"
+        table.cell(t,0,7,"Status")
+        table.cell(t,1,7,note)

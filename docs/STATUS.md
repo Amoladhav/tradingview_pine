@@ -1,6 +1,22 @@
 # Project status
 
-Updated: 2026-10-10.
+Updated: 2026-10-11.
+
+## Identifier cleanup
+
+Added versioned pre-commit/pre-push cleanup for literal `*.Identifier` files and a
+`git stage-clean` staging alias. Git has no staging hook; ordinary add/GUI staging
+still relies on the existing ignore rule and commit cleanup. Already indexed
+matches block commits until their removals are staged. Push cleanup never changes
+the index or committed history. Setup and boundaries are in `SETUP.md`.
+
+No Pine/Python research calculations, displays, alerts, settings, timeframes or
+historical results changed. Four offline synthetic tests passed in the current
+Linux environment: recursive cleanup/boundaries, forced staging and commit
+recovery, subdirectory staging, and direct push-hook cleanup with unchanged
+index/history. Hooks and the staging alias are enabled in this checkout. No push
+was executed. Shell syntax, diff whitespace and value-suppressing staged-content
+review passed. Native Windows, WSL, native Ubuntu and macOS acceptance remain pending.
 
 ## Current phase
 

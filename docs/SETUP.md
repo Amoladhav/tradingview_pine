@@ -95,6 +95,50 @@ dependency installation or successful script run is established by this update.
   history when comparing charts. The candle marker's current default is 06:30
   America/Los_Angeles; it is an explicit script input, not the computer timezone.
 
+## Identifier cleanup hooks
+
+The versioned `.githooks/` scripts delete literal, case-sensitive `*.Identifier`
+files throughout this working tree before commits and pushes. Ignored directories
+are included; `.git`, nested repositories/submodules and symlink targets are not
+traversed. Matching symlinks themselves are removed; directories are not deleted.
+This does not remove Windows alternate data streams such as `:Zone.Identifier`.
+The existing `.gitignore` rule also excludes these files from ordinary staging.
+
+Enable once in each clone, using PowerShell, Bash or zsh:
+
+```text
+git config --local core.hooksPath .githooks
+git config --local alias.stage-clean "!sh .githooks/stage_clean.sh"
+```
+
+Review any existing hooks before replacing `core.hooksPath`. Git does not install
+this configuration when cloning. Git for Windows supplies the shell and utilities;
+no Python dependency is needed for the hooks. Native Windows, WSL, native Ubuntu
+and macOS acceptance remain separate pending checks.
+
+Git has no pre-staging hook. Use `git stage-clean .` or `git stage-clean --all`
+instead of `git add` when cleanup is wanted at staging time. Path arguments retain
+the caller's directory context. Ordinary `git add` and GUI staging do not invoke
+cleanup; the commit hook is the fallback.
+
+If matching files are already staged or tracked, the commit hook deletes their
+working copies and stops the commit. Review and stage their removals explicitly
+(or use `git stage-clean --all` after reviewing all other changes), then retry.
+The push hook only cleans working files: it does not alter the index, remove files
+from existing commits or rewrite history. These hooks are convenience cleanup,
+not a guarantee that pushed history contains no matching files. `--no-verify`
+bypasses the commit/push hooks. Cleanup errors fail the triggering operation.
+
+Offline synthetic verification (Python 3.10+ for tests only):
+
+```text
+python -I -S tools/test_identifier_hooks.py
+```
+
+Use `python3` on Linux/macOS or `py -3` on Windows if appropriate. Tests use temporary
+repositories and sanitized subprocess environments with Git transports disabled;
+they do not push or execute application/provider scripts.
+
 ## Publish the prepared repository (owner-run)
 
 First review `git status`, `git log --oneline` and the source/license provenance.

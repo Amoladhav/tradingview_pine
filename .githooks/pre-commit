@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+repo_root=$(git rev-parse --show-toplevel)
+sh "$repo_root/.githooks/clean_identifiers.sh"
+# Do not silently modify the user's index, including partial commits.
+remaining=$(git ls-files --cached -- '*.Identifier')
+if test -n "$remaining"; then
+    echo 'Identifier cleanup: commit stopped; stage removal of tracked/staged *.Identifier files and retry.' >&2
+    exit 1
+fi

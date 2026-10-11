@@ -47,6 +47,9 @@ back to the canonical file before committing.
 Read [setup and private repository publication](docs/SETUP.md) for Windows
 PowerShell, WSL, Ubuntu and macOS. Git attributes normalize source files to LF;
 EditorConfig supplies UTF-8 defaults to compatible editors.
+Optional [Identifier cleanup hooks](docs/SETUP.md#identifier-cleanup-hooks) remove
+`*.Identifier` files before commits/pushes and through `git stage-clean`;
+enable them once per clone.
 
 [AGENTS.md](AGENTS.md) defines project instructions for coding agents, including
 Pine changes, verification and publication boundaries. Open this repository as the

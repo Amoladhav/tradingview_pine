@@ -1,0 +1,411 @@
+//@version=6
+
+indicator("Predictive Range",shorttitle="Predictive Range",overlay=true,max_lines_count=30,max_labels_count=30)
+
+// ============================================================================
+
+// V1 RESEARCH SUMMARY
+
+// Target = likely price AT endpoint. Touch = likely max/min BEFORE endpoint.
+
+// Historical quantiles, NOT guarantees or option probability-of-profit.
+
+//
+
+// DAILY PRE-2023 CALIBRATION (ATR21 units; each cell P90 / P95)
+
+// +------+-------------+------------+------------+-----------+
+
+// | Days | Target High | Target Low | Touch High | Touch Low |
+
+// +------+-------------+------------+------------+-----------+
+
+// |  1   | .87 / 1.16  | .82 / 1.17|1.15 / 1.45 |1.16 / 1.52|
+
+// |  5   |2.06 / 2.71  |1.89 / 2.68|2.67 / 3.32 |2.71 / 3.51|
+
+// | 10   |3.07 / 3.97  |2.66 / 3.84|3.89 / 4.81 |3.86 / 5.02|
+
+// | 20   |4.57 / 5.87  |3.64 / 5.32|5.73 / 7.04 |5.38 / 7.13|
+
+// | 40   |6.81 / 8.66  |4.74 / 7.31|8.52 /10.39 |7.51 /10.31|
+
+// | 60   |8.53 /10.83  |5.51 / 8.45|10.69/13.18 |9.17 /12.95|
+
+// +------+-------------+------------+------------+-----------+
+
+// DAILY UNSEEN P90 TEST
+
+// +------+-------------+------------+------------+-----------+
+
+// | Days | Target High | Target Low | Touch High | Touch Low |
+
+// +------+-------------+------------+------------+-----------+
+
+// |  1   |90.0%|90.0%|90.1%|90.2%|   5 |89.8%|90.2%|89.9%|90.8%|
+
+// | 10   |90.1%|90.2%|89.9%|91.0%|  20 |89.8%|90.2%|89.7%|91.1%|
+
+// | 40   |89.4%|90.2%|89.4%|91.2%|  60 |89.3%|90.9%|89.3%|91.7%|
+
+// +------+-------------+------------+------------+-----------+
+
+// 2020 warning: 40-60D Touch Low success fell to ~82.6-83.0%.
+
+//
+
+// TO-CLOSE UNSEEN 2026 P90 TEST - 20 instruments
+
+// +-----------+-------------+------------+------------+-----------+
+
+// | Hours Rem | Target High | Target Low | Touch High | Touch Low |
+
+// +-----------+-------------+------------+------------+-----------+
+
+// | .5 |91.1%|91.5%|91.1%|91.9%| 1.5|91.2%|90.5%|90.5%|91.7%|
+
+// |2.5 |90.9%|90.3%|90.9%|91.9%| 3.5|91.1%|90.7%|91.2%|91.5%|
+
+// |4.5 |91.3%|90.9%|89.7%|91.1%| 5.5|89.4%|91.7%|89.1%|92.0%|
+
+// +-----------+-------------+------------+------------+-----------+
+
+// SOXL 5.5h: Target High ~84.5%, Touch High ~88.7%.
+
+// Friday was NOT special; no weekday factor.
+
+// REJECTED V1 complexity: universal downside bias, DTE buckets, aggressive
+
+// recency weighting, large candle/gap/volume state model, boosted quantile ML,
+
+// ticker constants, mandatory earnings/IV, first-hour/gap rules.
+
+// ============================================================================
+
+// V2 CLEANUP
+// * No lookback. Forecast starts from Live or selected Static Anchor Candle.
+// * X Days = daily calibrated engine.
+// * To Today Close = validated 60-minute engine; use a 60m chart.
+// * Static anchor freezes price and ATR at the selected candle.
+// * No weekday, ticker, earnings, IV, or unvalidated adaptive multipliers.
+// ============================================================================
+
+gM="Model"
+
+mode=input.string("X Days","Forecast Mode",options=["X Days","To Today Close"],group=gM)
+
+days=input.int(5,"X Days",1,60,group=gM)
+
+conf=input.string("90%","Confidence",options=["90%","95%"],group=gM)
+
+showTarget=input.bool(true,"Show Target Range",group=gM)
+
+showTouch=input.bool(true,"Show Touch Range",group=gM)
+
+gA="Start Point"
+
+anchorMode=input.string("Live","Anchor",options=["Live","Static"],group=gA)
+
+histTime=input.time(1735851600000,"Static Anchor Time",group=gA)
+
+gV="Visual"
+
+cTH=input.color(color.green,"Target High",group=gV)
+
+cTL=input.color(color.red,"Target Low",group=gV)
+
+cXH=input.color(color.new(color.green,45),"Touch High",group=gV)
+
+cXL=input.color(color.new(color.red,45),"Touch Low",group=gV)
+
+cST=input.color(color.new(color.gray,25),"Start",group=gV)
+
+lw=input.int(2,"Line Width",1,4,group=gV)
+
+showLabels=input.bool(true,"Show Labels",group=gV)
+
+labelFont=input.string("Small","Label Font Size",options=["Tiny","Small","Normal","Large","Huge"],group=gV)
+
+labelLocation=input.string("Above","Label Location",options=["Above","On Line","Below"],group=gV)
+
+anchorMarkerColor=input.color(color.yellow,"Static Marker Color",group=gV)
+anchorXSize=input.string("Large","Static X Size",options=["Tiny","Small","Normal","Large","Huge"],group=gV)
+arrowSize=input.string("Large","Static Arrow Size",options=["Tiny","Small","Normal","Large","Huge"],group=gV)
+arrowLocation=input.string("Below Candle","Static Arrow Location",options=["Below Candle","Above Candle","At Candle Low","At Candle High"],group=gV)
+
+gT="Label Text"
+
+appendAnchor=input.bool(false,"Append Anchor (Live / Static)",group=gT)
+
+appendRange=input.bool(false,"Append Horizon",group=gT)
+
+appendConfidence=input.bool(false,"Append Confidence",group=gT)
+
+showTable=input.bool(true,"Show Info Table",group=gV)
+
+fDaily(float x,string w,bool p95)=>
+
+    float v=na
+
+    if not p95
+
+        v:=w=="TH"?0.838349*math.pow(x,.567170) :w=="TL"?0.874986*math.pow(x,.556500)-.050415*x :w=="XH"?1.102304*math.pow(x,.552941):1.209172*math.pow(x,.496688)
+
+    else
+
+        v:=w=="TH"?1.117063*math.pow(x,.553853) :w=="TL"?1.215972*math.pow(x,.561500)-.059978*x :w=="XH"?1.403891*math.pow(x,.497000)+.040150*x:1.515150*math.pow(x,.520210)
+
+    math.max(v,0)
+
+fI(float h,float a,float b,float c,float d,float e,float f)=>
+
+    float x=math.max(.5,math.min(5.5,h))
+
+    x<=1.5?a+(b-a)*(x-.5) :x<=2.5?b+(c-b)*(x-1.5) :x<=3.5?c+(d-c)*(x-2.5) :x<=4.5?d+(e-d)*(x-3.5) :e+(f-e)*(x-4.5)
+
+fIntra(float h,string w,bool p95)=>
+
+    float v=na
+
+    if not p95
+
+        v:=w=="TH"?fI(h,.5293,.7517,.9436,1.1047,1.2882,1.4883) :w=="TL"?fI(h,.5112,.7447,.9084,1.1263,1.3152,1.6058) :w=="XH"?fI(h,.7050,.9947,1.2612,1.5046,1.7325,2.0623) :fI(h,.7001,1.0564,1.3848,1.6782,1.9293,2.3846)
+
+    else
+
+        v:=w=="TH"?fI(h,.7173,1.0150,1.2641,1.5151,1.6870,2.0214) :w=="TL"?fI(h,.7243,1.0072,1.2976,1.6384,1.8241,2.2385) :w=="XH"?fI(h,.8817,1.2796,1.6243,1.9295,2.1669,2.5519) :fI(h,.9110,1.3652,1.7778,2.1543,2.4895,3.0226)
+
+    v
+
+
+
+fLabelSize(string s)=>
+    s=="Tiny"?size.tiny:s=="Small"?size.small:s=="Large"?size.large:s=="Huge"?size.huge:size.normal
+
+fLabelY(float linePrice,float atr,string loc)=>
+    float offset=na(atr)?syminfo.mintick*10.0:math.max(atr*0.06,syminfo.mintick*10.0)
+    loc=="Above"?linePrice+offset:loc=="Below"?linePrice-offset:linePrice
+
+fAppendText(bool addAnchor,bool addRange,bool addConfidence,string anchorText,string confidenceText,bool dailyMode,int xDays,float hoursRemaining)=>
+    string txt=""
+    if addAnchor
+        txt += " | " + anchorText
+    if addRange
+        txt += dailyMode ? " | " + str.tostring(xDays) + "D" : " | " + str.tostring(hoursRemaining,"#.##") + "h"
+    if addConfidence
+        txt += " | " + confidenceText
+    txt
+
+fDL(line x)=>
+
+    if not na(x)
+
+        line.delete(x)
+
+fDB(label x)=>
+
+    if not na(x)
+
+        label.delete(x)
+
+atrD=request.security(syminfo.tickerid,"D",ta.atr(21),lookahead=barmerge.lookahead_off)
+
+atrDP=request.security(syminfo.tickerid,"D",ta.atr(21)[1],lookahead=barmerge.lookahead_off)
+
+atrH=request.security(syminfo.tickerid,"60",ta.sma(ta.tr(true),20),lookahead=barmerge.lookahead_off)
+
+var float frozenP=na
+
+var float frozenAtr=na
+
+var int frozenBar=na
+var int frozenClose=na
+var float frozenLow=na
+var float frozenHigh=na
+
+// Resolve Static time to the NEAREST available chart candle.
+// The anchor price is the close of that resolved candle because the model was
+// calibrated from candle closes. Once resolved, X(time/bar) and Y(price) freeze.
+crossHist=time>=histTime and (na(time[1]) or time[1]<histTime)
+
+if anchorMode=="Static" and crossHist and na(frozenP)
+    bool usePrev=not na(time[1]) and math.abs(histTime-time[1]) <= math.abs(time-histTime)
+    frozenP:=usePrev?close[1]:close
+    frozenAtr:=mode=="To Today Close"?(usePrev?atrH[1]:atrH):(timeframe.isintraday?(usePrev?atrDP[1]:atrDP):(usePrev?atrD[1]:atrD))
+    frozenBar:=usePrev?bar_index-1:bar_index
+    frozenClose:=usePrev?time_close[1]:time_close
+    frozenLow:=usePrev?low[1]:low
+    frozenHigh:=usePrev?high[1]:high
+
+isDaily=mode=="X Days"
+
+isHist=anchorMode=="Static"
+
+modelClose=isHist and not na(frozenClose)?frozenClose:time_close
+
+hh=hour(modelClose,"America/New_York")
+
+mm=minute(modelClose,"America/New_York")
+
+hRem=16.0-(hh+mm/60.0)
+
+inSession=hRem>=.5 and hRem<=5.5
+
+p95=conf=="95%"
+
+validHist=not isHist or not na(frozenP)
+
+is60=timeframe.in_seconds()==3600
+valid0=mode=="To Today Close" and is60 and validHist and inSession
+
+valid=isDaily?validHist :valid0
+
+baseP=isHist?frozenP:close
+
+baseAtr=isHist?frozenAtr:(isDaily?(timeframe.isintraday?atrDP:atrD):atrH)
+
+mTH=isDaily?fDaily(days,"TH",p95) :fIntra(hRem,"TH",p95)
+
+mTL=isDaily?fDaily(days,"TL",p95) :fIntra(hRem,"TL",p95)
+
+mXH=isDaily?fDaily(days,"XH",p95) :fIntra(hRem,"XH",p95)
+
+mXL=isDaily?fDaily(days,"XL",p95) :fIntra(hRem,"XL",p95)
+
+th=valid?baseP+baseAtr*mTH :na
+
+tl=valid?baseP-baseAtr*mTL :na
+
+xh=valid?baseP+baseAtr*mXH :na
+
+xl=valid?baseP-baseAtr*mXL :na
+
+var line lTH=na
+
+var line lTL=na
+
+var line lXH=na
+
+var line lXL=na
+
+var line lST=na
+
+var label bTH=na
+
+var label bTL=na
+
+var label bXH=na
+
+var label bXL=na
+var label anchorX=na
+var label anchorArrow=na
+
+if barstate.islast
+
+    fDL(lTH)
+
+    fDL(lTL)
+
+    fDL(lXH)
+
+    fDL(lXL)
+
+    fDL(lST)
+
+    fDB(bTH)
+
+    fDB(bTL)
+
+    fDB(bXH)
+
+    fDB(bXL)
+    fDB(anchorX)
+    fDB(anchorArrow)
+
+    int x1=isHist and not na(frozenBar)?frozenBar:bar_index
+
+    int x2=isDaily?(x1+days):(x1+int(math.ceil(hRem)))
+
+    if valid and not na(baseAtr)
+
+        // Static anchor markers:
+        //   XXX = exact frozen model anchor price.
+        //   Arrow = visibility aid; location is user-selectable.
+        if isHist and not na(frozenBar)
+            markerXSize=fLabelSize(anchorXSize)
+            markerArrowSize=fLabelSize(arrowSize)
+            anchorX:=label.new(frozenBar,baseP,"XXX",style=label.style_none,textcolor=anchorMarkerColor,size=markerXSize,textalign=text.align_center)
+            float arrowOffset=math.max(baseAtr*0.10,syminfo.mintick*12.0)
+            float arrowY=arrowLocation=="Above Candle"?frozenHigh+arrowOffset:arrowLocation=="At Candle Low"?frozenLow:arrowLocation=="At Candle High"?frozenHigh:frozenLow-arrowOffset
+            string arrowText=arrowLocation=="Above Candle" or arrowLocation=="At Candle High"?"▼":"▲"
+            anchorArrow:=label.new(frozenBar,arrowY,arrowText,style=label.style_none,textcolor=anchorMarkerColor,size=markerArrowSize,textalign=text.align_center)
+
+        lST:=line.new(x1,baseP,x2,baseP,extend=extend.none,color=cST,style=line.style_dotted)
+
+        if showTarget
+
+            lTH:=line.new(x1,th,x2,th,extend=extend.none,color=cTH,width=lw)
+
+            lTL:=line.new(x1,tl,x2,tl,extend=extend.none,color=cTL,width=lw)
+
+        if showTouch
+
+            lXH:=line.new(x1,xh,x2,xh,extend=extend.none,color=cXH,width=lw,style=line.style_dashed)
+
+            lXL:=line.new(x1,xl,x2,xl,extend=extend.none,color=cXL,width=lw,style=line.style_dashed)
+
+        if showLabels
+            labelSize=fLabelSize(labelFont)
+            string textSuffix=fAppendText(appendAnchor,appendRange,appendConfidence,anchorMode,conf,isDaily,days,hRem)
+            if showTarget
+                bTH:=label.new(x2,fLabelY(th,baseAtr,labelLocation),"Target High  "+str.tostring(th,format.mintick)+textSuffix,style=label.style_none,textcolor=cTH,size=labelSize,textalign=text.align_left)
+                bTL:=label.new(x2,fLabelY(tl,baseAtr,labelLocation),"Target Low   "+str.tostring(tl,format.mintick)+textSuffix,style=label.style_none,textcolor=cTL,size=labelSize,textalign=text.align_left)
+            if showTouch
+                bXH:=label.new(x2,fLabelY(xh,baseAtr,labelLocation),"Touch High   "+str.tostring(xh,format.mintick)+textSuffix,style=label.style_none,textcolor=cXH,size=labelSize,textalign=text.align_left)
+                bXL:=label.new(x2,fLabelY(xl,baseAtr,labelLocation),"Touch Low    "+str.tostring(xl,format.mintick)+textSuffix,style=label.style_none,textcolor=cXL,size=labelSize,textalign=text.align_left)
+
+var table t=table.new(position.top_right,2,9,border_width=1)
+
+if barstate.islast
+
+    table.clear(t,0,0,1,8)
+
+    if showTable
+
+        table.cell(t,0,0,"Predictive Range",text_color=color.white,bgcolor=color.new(color.gray,65))
+
+        table.cell(t,1,0,conf,text_color=color.white,bgcolor=color.new(color.gray,65))
+
+        table.cell(t,0,1,"Mode")
+
+        table.cell(t,1,1,mode)
+
+        table.cell(t,0,2,"Anchor")
+
+        table.cell(t,1,2,anchorMode)
+
+        table.cell(t,0,3,isDaily?"Days":"Hours rem")
+
+        table.cell(t,1,3,isDaily?str.tostring(days) :str.tostring(hRem,"#.##"))
+
+        table.cell(t,0,4,"Target High")
+
+        table.cell(t,1,4,valid?str.tostring(th,format.mintick):"N/A")
+
+        table.cell(t,0,5,"Target Low")
+
+        table.cell(t,1,5,valid?str.tostring(tl,format.mintick):"N/A")
+
+        table.cell(t,0,6,"Touch High")
+
+        table.cell(t,1,6,valid?str.tostring(xh,format.mintick):"N/A")
+
+        table.cell(t,0,7,"Touch Low")
+
+        table.cell(t,1,7,valid?str.tostring(xl,format.mintick):"N/A")
+
+        string note=anchorMode=="Static" and na(frozenP)?"Static anchor not on loaded history":mode=="To Today Close" and not is60?"Use 60m chart":mode=="To Today Close" and not inSession?"Validated .5-5.5h":"Validation prototype"
+
+        table.cell(t,0,8,"Status")
+
+        table.cell(t,1,8,note)

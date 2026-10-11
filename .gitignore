@@ -27,5 +27,7 @@ __pycache__/
 .agents/
 *.Identifier
 *.gz
+*.tar
+*.zip
 *.csv
 *.parquet
