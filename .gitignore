@@ -26,3 +26,6 @@ __pycache__/
 .codex/
 .agents/
 *.Identifier
+*.gz
+*.csv
+*.parquet
