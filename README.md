@@ -1,28 +1,43 @@
 # TradingView Pine indicators
 
-Four standalone Pine Script v6 indicators, maintained as canonical source files
-with Git history. This repository contains indicators, not an order execution
-service or a locally runnable trading application.
+Ten standalone Pine Script v6 indicators live in `pine/`; Python research scripts
+live in `python_scritps/`. Git history tracks accepted source versions.
 
-| Source | Purpose |
+## Repository layout
+
+- `pine/`: canonical indicators and the two retained project prompt templates.
+- `python_scritps/`: currently `directional_range_study.py`; preserve this folder spelling.
+- `universe.csv`: local data file; schema, provenance and intended use are unreviewed.
+- `docs/`: setup, status, validation and historical baseline notes.
+- `.venv/`: optional ignored local Python environment, created separately per OS.
+
+| Source | Indicator |
 | --- | --- |
-| [630 First Candle Marker.pine](630%20First%20Candle%20Marker.pine) | Mark a configurable intraday candle time. |
-| [CCIEMA_percentile_extremes.pine](CCIEMA_percentile_extremes.pine) | CCI, EMA signal and adaptive percentile extremes. |
-| [Volume_Outlier_Profile.pine](Volume_Outlier_Profile.pine) | Comparable-volume percentile, relative volume and robust outlier display. |
-| [Price_Response_To_Colume.pine](Price_Response_To_Colume.pine) | Price range/body response relative to comparable volume. |
+| [630 First Candle Marker.pine](pine/630%20First%20Candle%20Marker.pine) | Configurable intraday candle marker. |
+| [ATR_Lines.pine](pine/ATR_Lines.pine) | ATR lines. |
+| [ATR_Values.pine](pine/ATR_Values.pine) | ATR values. |
+| [Adaptive_Stress.pine](pine/Adaptive_Stress.pine) | Adaptive Stress. |
+| [Adaptive_Weekly_Stress.pine](pine/Adaptive_Weekly_Stress.pine) | Adaptive Weekly Stress. |
+| [CCIEMA_percentile_extremes.pine](pine/CCIEMA_percentile_extremes.pine) | CCI, EMA signal and adaptive percentile extremes. |
+| [Earnings_Range.pine](pine/Earnings_Range.pine) | Earnings Range. |
+| [Price_Response_to_Volume.pine](pine/Price_Response_to_Volume.pine) | Price range/body response relative to comparable volume. |
+| [Ratio_Adjusted_Summation_Index.pine](pine/Ratio_Adjusted_Summation_Index.pine) | Ratio-Adjusted Summation Index. |
+| [Volume_Outlier_Profile.pine](pine/Volume_Outlier_Profile.pine) | Comparable-volume percentile, relative volume and robust outlier display. |
 
-Descriptions summarize the source; numerical and TradingView validation remain
-pending. The existing filename spelling is intentional for source continuity.
+Descriptions identify the source; numerical and TradingView validation remain pending.
+Python dependency, execution and data reviews are also pending; presence in this
+checkout does not establish a validated Python reference implementation.
 
 ## Use an indicator
 
-1. Open the desired `.pine` file in a UTF-8 editor and copy its complete contents.
+1. Open the desired `pine/*.pine` file in a UTF-8 editor and copy its complete contents.
 2. In TradingView, open a chart and the Pine Editor, then create a new indicator.
 3. Replace its contents, save, and select **Add to chart**.
 4. Review the inputs and follow [validation](docs/VALIDATION.md).
 
 Compilation and execution happen through TradingView. No Python, Node, Docker or
-local package installation is required for these scripts. See TradingView's
+local package installation is required for the Pine indicators. Optional Python environment commands are in
+[setup](docs/SETUP.md#optional-python-environment). See TradingView's
 [official first-indicator guide](https://www.tradingview.com/pine-script-docs/primer/first-indicator/).
 Saving a TradingView copy does not update the local Git file; copy accepted edits
 back to the canonical file before committing.
@@ -40,7 +55,7 @@ agent workspace. Codex discovers this filename as documented in the
 No background agent service is installed by this repository.
 
 See [status and next steps](docs/STATUS.md) and the [initial source manifest](docs/BASELINE.md).
-The two `ChatGPT_*_Project_Prompt.md` files are preserved historical prompt templates;
+The two `pine/ChatGPT_*_Project_Prompt.md` files are preserved historical prompt templates;
 current project instructions live in `AGENTS.md`.
 
 ## Sharing and licensing

@@ -22,3 +22,12 @@ no Pine code was executed and no full compile-safety review is claimed.
 
 The two prompt templates are byte-identical and intentionally retained. This
 bootstrap adds repository metadata/documentation only; indicator behavior is unchanged.
+
+## Current path mapping (2026-10-10)
+
+The table above is the original historical manifest, not the current inventory.
+Pine sources and both prompt templates now live under `pine/`. The original
+`Price_Response_To_Colume.pine` is now `pine/Price_Response_to_Volume.pine` following
+an earlier owner rename. Other baseline filenames retain their spelling under
+`pine/`. See [README](../README.md) for all ten current indicators, including later
+additions; the historical hashes above do not attest to current source contents.

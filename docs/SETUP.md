@@ -24,7 +24,7 @@ git status --short --branch
 ```
 
 Open the folder in your editor. Quote paths containing spaces, especially
-`"630 First Candle Marker.pine"`. Use the TradingView browser workflow in README.
+`"pine/630 First Candle Marker.pine"`. Use the TradingView browser workflow in README.
 
 ## WSL / Ubuntu (Bash)
 
@@ -55,6 +55,30 @@ Run `git --version`. If Git is unavailable, run `xcode-select --install` and fin
 the system installation prompt. Then use the same clone commands as the Bash
 section above. Open TradingView in the browser and use the same Pine source.
 
+## Optional Python environment
+
+From the repository root, with Python 3 installed:
+
+WSL / Ubuntu (Bash) or macOS (zsh/Bash):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+Native Windows (PowerShell):
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+The environment is ignored by Git. Never share it between native Windows and WSL
+or between operating systems. Creating it does not install script dependencies.
+Before running `python_scritps/directional_range_study.py`, review its dependencies,
+inputs, output paths and network/credential behavior. No supported Python version,
+dependency installation or successful script run is established by this update.
+
 ## Keep clones consistent
 
 - Use Git commits to synchronize accepted edits. Commit locally, then the owner
@@ -64,8 +88,9 @@ section above. Open TradingView in the browser and use the same Pine source.
   use LF. EditorConfig-aware editors use UTF-8. Do not autoformat Pine wholesale.
 - Keep filename case exact. Avoid case-only renames, Windows-reserved names and
   absolute personal paths in new code. Spaces in existing names are supported.
-- No virtual environment is needed. If Python tooling is introduced later, create
-  a separate environment on each OS and document its supported versions.
+- Pine indicators need no virtual environment. Python scripts are in
+  `python_scritps/`; use a separate environment on each OS. Supported Python
+  versions and dependencies still require review.
 - Match symbol/exchange, chart interval, session, adjustment settings, inputs and
   history when comparing charts. The candle marker's current default is 06:30
   America/Los_Angeles; it is an explicit script input, not the computer timezone.

@@ -4,14 +4,29 @@
 
 Read `README.md`, `docs/STATUS.md`, and `docs/VALIDATION.md` before changing code.
 For repository publication or platform setup, also read `docs/SETUP.md`.
-This is an independent Pine v6 indicator repository. The four root `.pine` files
-are canonical; never rename them or add `_v2`/`_final` copies without a request.
-In particular, preserve the existing `Price_Response_To_Colume.pine` spelling.
-The requirements from `ChatGPT_TradingView_Project_Prompt.md` and
-`ChatGPT_Trading_Project_Prompt.md` are standing coding instructions incorporated
-below. Both templates are currently identical. Their empty "Current requested
-change" placeholder is not a task; use the owner's actual request. If either
-template changes, review and reconcile its requirements here explicitly.
+This independent repository contains Pine v6 indicators in `pine/` and Python
+research scripts in `python_scritps/`. The ten `pine/*.pine` files are canonical;
+never rename them or add `_v2`/`_final` copies without a request. Preserve the current
+`pine/Price_Response_to_Volume.pine` filename and `python_scritps/` folder spelling.
+The root `universe.csv` is a local data file whose schema and provenance require
+review before use or inclusion in a commit. Do not infer its contents from its name.
+The requirements from `pine/ChatGPT_TradingView_Project_Prompt.md` and
+`pine/ChatGPT_Trading_Project_Prompt.md` are standing coding instructions incorporated
+below. The templates now differ; the Trading Project template adds Style-tab
+hygiene and numerical alert-output preservation. An empty requested-change
+placeholder is not a task; use the owner's actual request. If either template
+changes, review and reconcile its requirements here explicitly.
+
+Template reconciliation (2026-10-10): preserve numerical plot outputs used for
+TradingView user-defined alert thresholds. For changed/new visuals, distinguish
+user-visible, optional-visible and internal/output-only elements; use
+`editable=false` where supported for output-only plots and control `display`
+separately. Preserve useful Inputs and avoid redundant Style controls where
+appropriate. This does not authorize unrelated plot changes. Use underscores for
+new filenames; the template's space-replacement rule does not override preservation
+of existing canonical names, including `pine/630 First Candle Marker.pine`.
+The template's static-pass wording applies only after an actual full static review;
+documentation work must not claim that review occurred.
 
 ## Future coding requests
 
@@ -25,7 +40,7 @@ template changes, review and reconcile its requirements here explicitly.
   refactoring. If a requirement is incomplete, clarify consequential ambiguity
   while continuing independent work that is already defined.
 - Keep full runnable source in the canonical file, not just a patch or fragment.
-  For future non-Pine code, carry forward the same source-of-truth, small-change,
+  For Python and other non-Pine code, carry forward the same source-of-truth, small-change,
   verification and delivery rules, using the language's appropriate checks. Pine
   syntax and TradingView compilation requirements apply only to Pine files.
 
@@ -57,8 +72,10 @@ template changes, review and reconcile its requirements here explicitly.
 - Record TradingView compilation as pending unless actual evidence is available.
   Only if a full static pass was actually performed may you say:
   `Static Pine compile-safety pass completed; TradingView compiler not available in this environment.`
-- No local Pine compiler, application runtime, automated signal tests, hooks or
-  hosted CI are configured. Do not execute credentialed TradingView actions.
+- No local Pine compiler, automated Pine signal tests, hooks or hosted CI are
+  configured. Python dependencies and runtime verification are pending; inspect
+  scripts for I/O and credential side effects before execution. Do not execute
+  credentialed TradingView actions.
 - Update status with the same increment. Keep OS verification separate for native
   Windows, WSL, Ubuntu and macOS. Use UTF-8 and the repository line-ending rules.
 

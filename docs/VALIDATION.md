@@ -24,7 +24,7 @@ claimed Pine compile-safety pass or synthetic tests that cannot execute Pine.
 
 ## TradingView acceptance
 
-For each of the four scripts record date, Git commit, platform/browser, symbol and
+For each of the ten canonical scripts in `pine/` record date, Git commit, platform/browser, symbol and
 exchange, chart type, timeframe, session, inputs and outcome. Keep account details
 and private chart exports out of Git; report only intended sanitized observations.
 
@@ -39,6 +39,16 @@ and private chart exports out of Git; report only intended sanitized observation
 - Check identical source/settings on each target OS/browser. Compilation is shared
   through TradingView but local checkout, encoding and editor behavior still need
   platform evidence. A successful chart is not evidence of profitability.
+
+## Python changes
+
+Canonical Python source currently lives in `python_scritps/`. Before executing
+scripts or collecting tests, inspect imports, configuration, filesystem writes,
+network access and credential resolution. Establish offline test isolation first.
+Record supported Python versions, dependencies and meaningful checks when reviewed;
+none are established by the folder-layout documentation update. Review the root
+`universe.csv` schema and provenance before using it as input or committing it.
+Pine validation does not establish Python correctness or Pine/Python parity.
 
 ## Platform acceptance record
 
