@@ -2,6 +2,14 @@
 
 Updated: 2026-10-11.
 
+## Options-source directive
+
+AGENTS records Tradier as an approved source for requested options data, with
+provider I/O separate from calculations and explicit profile selection.
+Credentialed requests remain user-run. This documentation-only update does not
+change collectors, credentials, calculations or the weekly RSI data source; no
+provider request was executed.
+
 ## Identifier cleanup
 
 Added versioned pre-commit/pre-push cleanup for literal `*.Identifier` files and a

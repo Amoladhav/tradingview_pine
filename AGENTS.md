@@ -40,6 +40,18 @@ Run reviewed synthetic tests through `tools/test_research_offline.py` using the
 virtual-environment interpreter; the runner installs its boundary before collection.
 No provider run or TradingView parity is implied by offline test success.
 
+## Options data source
+
+- Tradier is an approved source when collecting requested options data. Use its
+  provider adapter where suitable; this does not change the current Yahoo source
+  for the weekly equity RSI study or authorize unrelated data collection.
+- Keep Tradier I/O separate from research calculations, preserve source data and
+  provenance before deriving features, and explicitly select the intended
+  sandbox or live-data profile. Never infer the profile from an available token.
+- Credentialed requests remain user-run under the shared policy. Agents may
+  prepare and test the adapter offline, but must not read API keys or execute
+  authenticated requests. Source approval does not authorize brokerage actions.
+
 ## Python portability, explanations and research handoff
 
 - Write platform-neutral Python that works on native Windows and Linux. macOS
