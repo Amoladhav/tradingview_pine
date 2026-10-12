@@ -55,29 +55,51 @@ Run `git --version`. If Git is unavailable, run `xcode-select --install` and fin
 the system installation prompt. Then use the same clone commands as the Bash
 section above. Open TradingView in the browser and use the same Pine source.
 
-## Optional Python environment
+## Python research environment
 
-From the repository root, with Python 3 installed:
+Use Python 3.12 or newer. The current offline validation environment uses
+Python 3.14.4; native Windows, WSL, Ubuntu and macOS acceptance remain separate.
+Dependencies are defined once in `pyproject.toml`, with Yahoo, Parquet and Tradier
+extras. Installation may contact the package index and run the standard packaging
+backend; it does not fetch market data or resolve provider credentials.
 
-WSL / Ubuntu (Bash) or macOS (zsh/Bash):
+From the repository root on WSL / Ubuntu (Bash) or macOS (zsh/Bash):
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
+.venv/bin/python -m pip install -e '.[all]'
+.venv/bin/python -I -S tools/test_research_offline.py
+.venv/bin/python python_scritps/rsi_weekly_study.py --help
 ```
 
 Native Windows (PowerShell):
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\python.exe -m pip install -e '.[all]'
+.\.venv\Scripts\python.exe -I -S tools/test_research_offline.py
+.\.venv\Scripts\python.exe python_scritps/rsi_weekly_study.py --help
 ```
 
-The environment is ignored by Git. Never share it between native Windows and WSL
-or between operating systems. Creating it does not install script dependencies.
-Before running `python_scritps/directional_range_study.py`, review its dependencies,
-inputs, output paths and network/credential behavior. No supported Python version,
-dependency installation or successful script run is established by this update.
+The virtual environment is ignored by Git. Create a separate one per OS; never
+share Windows and WSL environments. For only the weekly RSI pipeline,
+`python -m pip install -e '.[yahoo]'` installs its provider extra. Parquet and
+Tradier commands require their respective extras. Legacy requirements files
+forward to the root definition and must be invoked from the repository root.
+Direct dependency pins reproduce the reviewed environment; transitive locking
+and installation on each target OS remain release checks.
+
+Installed commands: `research-rsi-weekly`, `research-directional`,
+`research-adaptive`, `research-earnings`, `research-compact-csv`,
+`research-range`, `research-intraday`, and `research-tradier-iv`.
+Use each command's `--help` for its arguments. Existing file paths remain valid.
+Yahoo collection requires an explicit `--fetch`; the default reads matching
+cached captures. See [framework and migration notes](PYTHON_RESEARCH.md) and
+[RSI collection/replay commands](RSI_STUDY.md).
+
+All credentialed Tradier execution remains owner-run. Never paste a token into
+commands or documentation. No automatic provider execution, scheduler or
+background worker is installed.
 
 ## Keep clones consistent
 
@@ -89,8 +111,8 @@ dependency installation or successful script run is established by this update.
 - Keep filename case exact. Avoid case-only renames, Windows-reserved names and
   absolute personal paths in new code. Spaces in existing names are supported.
 - Pine indicators need no virtual environment. Python scripts are in
-  `python_scritps/`; use a separate environment on each OS. Supported Python
-  versions and dependencies still require review.
+  `python_scritps/`; use a separate environment on each OS. Python dependencies and commands
+  are centralized in `pyproject.toml`; per-platform execution remains pending.
 - Match symbol/exchange, chart interval, session, adjustment settings, inputs and
   history when comparing charts. The candle marker's current default is 06:30
   America/Los_Angeles; it is an explicit script input, not the computer timezone.

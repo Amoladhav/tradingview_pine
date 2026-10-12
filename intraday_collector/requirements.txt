@@ -1,3 +1,2 @@
-yfinance>=0.2.65
-pandas>=2.2
-numpy>=2.0
+# Compatibility entry point; run pip from the repository root.
+-r ../requirements.txt

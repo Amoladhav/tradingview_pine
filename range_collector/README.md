@@ -1,36 +1,35 @@
 # Adaptive X-day range: expanded research collection
 
-## Setup (Windows PowerShell)
+## Setup and execution
 
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-$env:TRADIER_TOKEN = 'YOUR_LIVE_TRADIER_ACCESS_TOKEN'
-python collect.py --out range_output --start 2015-01-01
+Install the shared Python dependencies using the repository [setup guide](../docs/SETUP.md).
+Run commands from the repository root with the selected virtual-environment interpreter.
+The directory requirements file delegates to the shared requirements.
+
+By default, collection replays the exact request from the shared local capture cache;
+a cache miss fails without network access. Add `--fetch` explicitly for an owner-run
+public download. Captures preserve the decoded yfinance table before filtering;
+they are not raw Yahoo response bytes. Daily prices retain `auto_adjust=True`.
+
+```bash
+python range_collector/collect.py --only SOXL --out range_output --start 2015-01-01 --fetch
+python range_collector/collect.py --only SOXL --out range_replay --start 2015-01-01
+python range_collector/collect.py --stocks-file stocks.csv --out manual_data --fetch
 ```
 
-**Important:** Tradier sandbox market quotes may be delayed/static; use a live-market-data entitlement for a meaningful spread screen. Run during regular market hours, preferably on multiple days. Never share your token. Historical OHLC comes from Yahoo Finance via `yfinance`, not Tradier. Check provider terms and corporate-action adjustments.
+`--cache-dir` selects private cache storage. `--only` bypasses all universe
+selection, including a supplied stock CSV. Without `--only` or `--select-stocks`,
+the default is the existing ETF basket; `--stocks-file` adds a CSV with a `symbol`
+column and optional `sector` column. `--skip-stocks` remains compatible.
 
-### Test SOXL first
-
-```powershell
-python collect.py --only SOXL --out test_soxl --start 2015-01-01
-```
-
-### Collect ETFs only (no token needed)
-
-```powershell
-python collect.py --skip-stocks --out etf_data
-```
-
-### Manually supply 20 stocks (bypass options-liquidity ranking)
-
-Create `stocks.csv` with `symbol,sector` headers, then:
-
-```powershell
-python collect.py --stocks-file stocks.csv --out manual_data
-```
+Automatic stock discovery now requires **both** `--select-stocks --fetch`.
+This legacy path uses a user-managed `TRADIER_TOKEN` and may contact Wikipedia,
+Yahoo and Tradier. Only the owner may execute it. It retains the old selection
+formulas; its Wikipedia, market-cap and Tradier capture/profile migration is
+pending. Those paths do not yet provide the shared history adapter's immutable
+capture or replay guarantees. Existing selection snapshots are reused without a
+freshness guarantee. Missing credentials fail rather than selecting a substitute
+cohort. Configure credentials locally; never paste them into source or chat.
 
 ### How stock selection works
 
@@ -42,7 +41,7 @@ python collect.py --stocks-file stocks.csv --out manual_data
 
 ### Files
 
-Per-symbol `*_anchors.csv.gz` and `*_outcomes.csv.gz`, with column names matching the uploaded tables; `manifest.csv` reports success/errors. Outcomes include horizons 1..60 by default. No synthetic ETF earnings events are generated. SOXL is mandatory in the default ETF cohort.
+Per-symbol `*_anchors.csv.gz` and `*_outcomes.csv.gz`, with column names matching the uploaded tables; `manifest.csv` reports success and sanitized error codes. Shared run logs and allowlisted review reports live under `artifacts/`; a partial run exits nonzero. Files are replaced atomically, but an anchor/outcome pair is not a multi-file transaction; consult the current manifest before reuse. Outcomes include horizons 1..60 by default. No synthetic ETF earnings events are generated. SOXL is mandatory in the default ETF cohort.
 
 ### Research caveats requiring explicit checks before pooling
 
@@ -55,3 +54,12 @@ Per-symbol `*_anchors.csv.gz` and `*_outcomes.csv.gz`, with column names matchin
 7. Data downloads can be rate-limited or fail. Review `manifest.csv`; rerun failures with `--only`.
 8. `--end` is an **exclusive** date for yfinance. Data timestamps are daily exchange sessions.
 9. This collector does **not** prove model improvements; run chronological holdouts and clustered/block confidence intervals on the new cohort.
+
+## Verification boundary
+
+Synthetic offline regressions cover complete future-session labels, earlier-feature
+stability after changing future prices, invalid horizons and insufficient history.
+The optimized rolling-window excursion computation retains the original label
+semantics. Provider downloads, authenticated selection, cross-platform runtime,
+corporate-action handling and research-performance acceptance remain pending.
+Pine code and alert behavior are unchanged.

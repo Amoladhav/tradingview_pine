@@ -28,6 +28,47 @@ of existing canonical names, including `pine/630 First Candle Marker.pine`.
 The template's static-pass wording applies only after an actual full static review;
 documentation work must not claim that review occurred.
 
+## Python research organization
+
+Python source paths remain `python_scritps/`, `range_collector/` and
+`intraday_collector/`. Shared provider/capture/cache/progress code belongs in
+`python_scritps/research_core/`; new weekly RSI calculations belong in
+`python_scritps/rsi_research/`. `pyproject.toml` is the dependency authority.
+Read `docs/PYTHON_RESEARCH.md`, `docs/RESEARCH_PLAN.md` and `docs/RSI_STUDY.md`
+for relevant Python changes. Keep predictor and future-outcome tables separate.
+Run reviewed synthetic tests through `tools/test_research_offline.py` using the
+virtual-environment interpreter; the runner installs its boundary before collection.
+No provider run or TradingView parity is implied by offline test success.
+
+## Python portability, explanations and research handoff
+
+- Write platform-neutral Python that works on native Windows and Linux. macOS
+  remains a target under the shared policy. Treat WSL and native Windows as
+  different environments; do not assume a WSL pass proves Windows support.
+- Use `pathlib` for paths, explicit UTF-8 encodings, portable Python APIs for file
+  operations and archiving, and timezone-aware timestamps. Do not require Bash,
+  POSIX-only utilities, hardcoded path separators, personal absolute paths or
+  Unix-only permissions for application behavior. Keep OS-specific setup steps
+  separate and document equivalent PowerShell and Linux shell commands.
+- Review dependencies for the supported Python versions and Windows/Linux
+  availability. Keep environment configuration explicit and create separate
+  virtual environments per OS. Test each platform when available; otherwise mark
+  it pending rather than claiming cross-platform verification from Linux alone.
+- Whenever working on this project, explain relevant Python technical, logical
+  and architectural details as the work proceeds so the owner can learn: what
+  changes, why it helps, the tradeoff, and how it is checked. Use small concrete
+  examples and define unfamiliar terms. Provide concise design rationale, not
+  unexplained jargon or a transcript of internal deliberation. This is a standing
+  requirement for future work and all delegated agents.
+- The present workflow collects requested data and produces reproducible research
+  artifacts for the owner's handoff to ChatGPT for indicator analysis/logic.
+  Keep data, formulas, provenance, warnings and future-outcome separation clear.
+  Do not infer authorization to create a trading strategy or optimize thresholds.
+- Agents can implement Pine v6 when the owner requests that next phase. Preserve
+  the canonical Pine files and change contract; TradingView compilation and chart
+  acceptance remain owner-run unless actual authorized evidence is available.
+  Python dataset generation alone does not establish Pine parity.
+
 ## Future coding requests
 
 - Apply these instructions to every future feature, fix and code review in this
@@ -72,10 +113,11 @@ documentation work must not claim that review occurred.
 - Record TradingView compilation as pending unless actual evidence is available.
   Only if a full static pass was actually performed may you say:
   `Static Pine compile-safety pass completed; TradingView compiler not available in this environment.`
-- No local Pine compiler, automated Pine signal tests, hooks or hosted CI are
-  configured. Python dependencies and runtime verification are pending; inspect
-  scripts for I/O and credential side effects before execution. Do not execute
-  credentialed TradingView actions.
+- No local Pine compiler, automated Pine signal tests or hosted CI are configured.
+  Identifier cleanup hooks exist; see `docs/SETUP.md`. Python dependency and offline
+  verification evidence is recorded in `docs/STATUS.md`; live and platform checks
+  remain pending. Inspect scripts for I/O and credential side effects before
+  execution. Do not execute credentialed TradingView actions.
 - Update status with the same increment. Keep OS verification separate for native
   Windows, WSL, Ubuntu and macOS. Use UTF-8 and the repository line-ending rules.
 

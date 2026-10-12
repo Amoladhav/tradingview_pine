@@ -18,27 +18,51 @@ index/history. Hooks and the staging alias are enabled in this checkout. No push
 was executed. Shell syntax, diff whitespace and value-suppressing staged-content
 review passed. Native Windows, WSL, native Ubuntu and macOS acceptance remain pending.
 
-## Current phase
+## Python research framework and RSI study
 
-Folder-layout documentation aligned with the owner's restructuring: ten canonical
-Pine indicators and two prompt templates now reside in `pine/`. Python source is
-in `python_scritps/` (spelling preserved), with `directional_range_study.py` present.
-The root `universe.csv` is unreviewed local data. Python dependencies, supported
-versions, I/O behavior and runtime acceptance remain pending.
+AGENTS now explicitly requires platform-neutral Windows/Linux Python, separate
+platform validation and concise explanations of technical choices while working.
+The current workflow produces research datasets for owner handoff to ChatGPT;
+Pine implementation is a possible separately requested next phase.
 
-AGENTS, README, setup, validation and baseline path notes now reflect this layout.
-The moved Pine/template contents match HEAD after LF normalization. The templates
-differ; their added Style-tab and numerical alert-output guidance is reconciled in
-AGENTS, preserving existing filenames and truthful static-review reporting.
-No source edits, revision
-increments, calculations, displays, settings, alerts or timeframe changes were
-made by this documentation update. Owner source moves and new Python/data files
-remain outside the documentation commit.
+Python-only implementation: dependency configuration in `pyproject.toml`, shared
+`research_core` fetching/capture/cache/errors/progress and thin existing CLI entry
+points. Source paths and existing daily research formulas are retained. Daily
+forward-window calculations are reorganized for efficiency. Source captures precede
+projection; they preserve decoded library tables rather than claiming Yahoo wire
+fidelity. Public fetching is explicit (`--fetch`), cache-first, with intentional
+refresh via `--fetch --refresh`. Credentials remain owner-run only.
 
-Documentation checks: UTF-8, relative links, inventory consistency, shared-policy
-preservation, Git whitespace review and value-suppressing staged scan. No Python
-script execution or Pine compile-safety pass was performed. TradingView compilation,
-chart/alert acceptance and native Windows, WSL, Ubuntu and macOS checks remain pending.
+New `rsi_research` modules implement the requested weekly study: daily-to-weekly
+aggregation, SMA-seeded Wilder RSI, descriptive features, separate future outcomes
+and paths, dictionary/metadata/summary and a bounded source/output archive. The
+methodology, censoring, adjustment caveats and omission of unverified earnings are
+in [RSI_STUDY.md](RSI_STUDY.md). No strategy labels or optimization were added.
+
+Compatibility changes: `directional_universe.csv` protects the existing root
+`universe.csv`; Yahoo calls require explicit fetching; automatic Tradier stock
+selection requires `--select-stocks --fetch`; sandbox IV requests require
+`--fetch`, and implicit API retries were removed. See
+[PYTHON_RESEARCH.md](PYTHON_RESEARCH.md) and [RESEARCH_PLAN.md](RESEARCH_PLAN.md).
+
+Verification: 51 guarded offline synthetic tests passed on Linux / Python
+3.14.4, covering cache preservation/replay, CLI failures and credential isolation,
+legacy numerical regressions, DST, RSI causality, horizons, empty schemas and
+archive failure. The final source wheel built successfully with setuptools; all
+eight entry-point modules are included. Python syntax, UTF-8, local Markdown
+links and Git whitespace checks passed. Exact staged contents received a
+value-suppressing scan before the local commit; this does not prove absence of
+secrets. No live research dataset was acquired. Provider access, real
+research results, chart RSI parity, native Windows, WSL, native Ubuntu and macOS
+acceptance remain pending. No Pine code, calculations, displays, alerts, settings
+or timeframe behavior changed; no TradingView compilation was attempted.
+
+Known limits: direct dependency pins are not a transitive lock; system session
+calendar completeness is not certified; capture profile comparisons are not yet
+implemented; legacy Wikipedia/market-cap/Tradier liquidity discovery has not adopted
+the full capture contract. Shared logs identify code revision as `unrecorded`
+and profile as `local`; live provenance acceptance remains open. Captures/logs have
+no automatic retention deletion. Hosted CI remains inactive.
 
 ## Earlier milestones (historical)
 
@@ -84,6 +108,6 @@ or cross-platform runtime claim is established by repository setup.
 4. Choose a license before any public release; public publication is not authorized.
 5. Make subsequent indicator changes in small commits using VALIDATION.md.
 
-Future work, not implemented: deterministic signal fixtures or a separately
-validated Python reference if needed (the present research script is not yet
-validated); local automated checks; multi-OS hosted CI only after explicit activation. Preserve one canonical Pine file per indicator.
+Python follow-up work is tracked in [RESEARCH_PLAN.md](RESEARCH_PLAN.md).
+Deterministic Pine signal parity and multi-OS acceptance remain pending; hosted CI
+requires separate explicit activation. Preserve one canonical Pine file per indicator.

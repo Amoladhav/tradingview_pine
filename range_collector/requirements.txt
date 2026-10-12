@@ -1,5 +1,2 @@
-pandas>=2.2
-numpy>=1.26
-yfinance>=0.2.65
-requests>=2.31
-lxml>=5
+# Compatibility entry point; run pip from the repository root.
+-r ../requirements.txt

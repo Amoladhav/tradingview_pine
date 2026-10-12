@@ -1,12 +1,17 @@
 # TradingView Pine indicators
 
-Ten standalone Pine Script v6 indicators live in `pine/`; Python research scripts
-live in `python_scritps/`. Git history tracks accepted source versions.
+Standalone Pine Script v6 indicators live in `pine/`; Python research tools use
+`python_scritps/` with daily/intraday collector entry points retained in their
+existing folders. Git history tracks accepted source versions.
 
 ## Repository layout
 
 - `pine/`: canonical indicators and the two retained project prompt templates.
-- `python_scritps/`: currently `directional_range_study.py`; preserve this folder spelling.
+- `python_scritps/`: research entry points, shared `research_core/`, and weekly
+  `rsi_research/` calculations; preserve this folder spelling.
+- `range_collector/`, `intraday_collector/`: daily and intraday collection.
+- `pyproject.toml`: central dependencies, package configuration and CLI commands.
+- `tests/`: synthetic offline Python research checks.
 - `universe.csv`: local data file; schema, provenance and intended use are unreviewed.
 - `docs/`: setup, status, validation and historical baseline notes.
 - `.venv/`: optional ignored local Python environment, created separately per OS.
@@ -25,8 +30,26 @@ live in `python_scritps/`. Git history tracks accepted source versions.
 | [Volume_Outlier_Profile.pine](pine/Volume_Outlier_Profile.pine) | Comparable-volume percentile, relative volume and robust outlier display. |
 
 Descriptions identify the source; numerical and TradingView validation remain pending.
-Python dependency, execution and data reviews are also pending; presence in this
-checkout does not establish a validated Python reference implementation.
+Python implementation and offline evidence are tracked separately in
+[status](docs/STATUS.md); live provider, TradingView parity and platform acceptance
+remain pending.
+
+## Python research
+
+Start with [Python setup](docs/SETUP.md#python-research-environment),
+[framework and compatibility](docs/PYTHON_RESEARCH.md), and the
+[weekly RSI study](docs/RSI_STUDY.md). Install once from the repository root;
+all entry points share dependency definitions. Yahoo fetching is explicit and
+cache replay supports offline feature regeneration. RSI predictor, outcome and
+path tables remain separate.
+
+```text
+python -I -S tools/test_research_offline.py
+```
+
+Use the virtual-environment interpreter. These tests use synthetic data and
+block Python network/subprocess access before test collection. No credentials,
+provider requests, strategy optimization or Pine changes are required.
 
 ## Use an indicator
 
@@ -37,7 +60,7 @@ checkout does not establish a validated Python reference implementation.
 
 Compilation and execution happen through TradingView. No Python, Node, Docker or
 local package installation is required for the Pine indicators. Optional Python environment commands are in
-[setup](docs/SETUP.md#optional-python-environment). See TradingView's
+[setup](docs/SETUP.md#python-research-environment). See TradingView's
 [official first-indicator guide](https://www.tradingview.com/pine-script-docs/primer/first-indicator/).
 Saving a TradingView copy does not update the local Git file; copy accepted edits
 back to the canonical file before committing.

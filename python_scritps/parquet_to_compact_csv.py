@@ -27,15 +27,18 @@ Size choices
 * no index column
 
 Install:
-    python3 -m pip install -U pandas pyarrow
+    See docs/SETUP.md for the shared dependency installation.
 
 Run:
     python3 parquet_to_compact_csv.py
 """
 
+import argparse
 from pathlib import Path
 import gzip
-import shutil
+from research_core.io import atomic_path
+from research_core.runtime import logged_main
+from research_core.errors import ResearchError
 import pandas as pd
 
 ANCHOR_DIR = Path("adaptive_range_anchors")
@@ -55,19 +58,17 @@ def parquet_files(root: Path):
     return files
 
 
-def convert_directory(root: Path, output: Path):
+def convert_directory(root: Path, output: Path, log=None):
     files = parquet_files(root)
-
-    if output.exists():
-        output.unlink()
 
     total_rows = 0
     header_written = False
+    columns = None
 
     # text mode through gzip lets pandas append each symbol without ever
     # assembling the complete dataset in memory.
-    with gzip.open(
-        output,
+    with atomic_path(output) as temporary, gzip.open(
+        temporary,
         mode="wt",
         compresslevel=GZIP_LEVEL,
         encoding="utf-8",
@@ -75,6 +76,11 @@ def convert_directory(root: Path, output: Path):
     ) as gz:
         for i, path in enumerate(files, 1):
             df = pd.read_parquet(path, engine="pyarrow")
+
+            if columns is None:
+                columns = list(df.columns)
+            elif list(df.columns) != columns:
+                raise ResearchError('PARQUET_SCHEMA_MISMATCH')
 
             # Stable ordering helps compression and later auditing.
             sort_cols = [
@@ -93,36 +99,44 @@ def convert_directory(root: Path, output: Path):
                 lineterminator="\n",
             )
 
+            if log is not None:
+                log.progress(success=True)
             header_written = True
             total_rows += len(df)
 
-            print(
+            (log.message if log is not None else print)(
                 f"[{i:02d}/{len(files):02d}] "
-                f"{path.name:18s} "
                 f"{len(df):,} rows"
             )
 
             del df
 
     size_mb = output.stat().st_size / (1024 * 1024)
-    print(
+    (log.message if log is not None else print)(
         f"\nWrote {output}: "
         f"{total_rows:,} rows, {size_mb:.1f} MiB"
     )
 
 
-def main():
-    print("Converting anchor features...")
-    convert_directory(ANCHOR_DIR, ANCHOR_OUT)
+@logged_main
+def main(log):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--anchor-dir', type=Path, default=ANCHOR_DIR)
+    parser.add_argument('--outcome-dir', type=Path, default=OUTCOME_DIR)
+    parser.add_argument('--anchor-output', type=Path, default=ANCHOR_OUT)
+    parser.add_argument('--outcome-output', type=Path, default=OUTCOME_OUT)
+    args = parser.parse_args()
+    log.message("Converting anchor features...")
+    convert_directory(args.anchor_dir, args.anchor_output, log)
 
-    print("\nConverting forward outcomes...")
-    convert_directory(OUTCOME_DIR, OUTCOME_OUT)
+    log.message("\nConverting forward outcomes...")
+    convert_directory(args.outcome_dir, args.outcome_output, log)
 
-    print("\nDONE")
-    print(f"Upload: {ANCHOR_OUT}")
-    print(f"Upload: {OUTCOME_OUT}")
-    print("Also upload adaptive_range_symbols.csv if available.")
+    log.message("\nDONE")
+    log.message(f"Output: {args.anchor_output}")
+    log.message(f"Output: {args.outcome_output}")
+    log.message("Also upload adaptive_range_symbols.csv if available.")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -42,13 +42,37 @@ and private chart exports out of Git; report only intended sanitized observation
 
 ## Python changes
 
-Canonical Python source currently lives in `python_scritps/`. Before executing
-scripts or collecting tests, inspect imports, configuration, filesystem writes,
-network access and credential resolution. Establish offline test isolation first.
-Record supported Python versions, dependencies and meaningful checks when reviewed;
-none are established by the folder-layout documentation update. Review the root
-`universe.csv` schema and provenance before using it as input or committing it.
-Pine validation does not establish Python correctness or Pine/Python parity.
+Python source lives in `python_scritps/`, `range_collector/` and
+`intraday_collector/`. Read [framework](PYTHON_RESEARCH.md),
+[research plan](RESEARCH_PLAN.md) and [RSI methodology](RSI_STUDY.md).
+
+Before executing scripts or collecting tests, inspect imports, configuration,
+filesystem writes, network access and credential resolution. The offline runner
+reexecutes with a synthetic environment and temporary HOME, then denies Python
+socket/subprocess operations and restricts filesystem access before collection.
+It allows numerical dependencies and system timezone data. This is a guard for
+reviewed code, not an OS sandbox for hostile native extensions.
+
+```bash
+.venv/bin/python -I -S tools/test_research_offline.py
+```
+
+```powershell
+.\.venv\Scripts\python.exe -I -S tools/test_research_offline.py
+```
+
+The suite uses synthetic data only. Tests cover capture/replay and safe failure,
+atomic output, daily outcomes and causal features, intraday DST/session handling,
+RSI initialization, future-outcome separation and archive output. Record actual
+results in STATUS; no synthetic test proves provider access or completeness.
+
+For RSI acceptance, compare AMZN, AAPL, MSFT, JPM, XOM and SPY on identical source
+history, split/dividend adjustment settings and completed-week boundaries. Check
+holiday weeks, IPO warm-up, absent sessions, missing volume, zero denominators,
+RSI seed, equality at crosses, confirmed pivots and truncated future horizons.
+The root `universe.csv` remains unreviewed owner data and is not an implicit input.
+No Pine compilation is required by Python-only changes; Pine/Python parity remains
+owner-run and pending. Do not infer profitability or generalization from output.
 
 ## Platform acceptance record
 

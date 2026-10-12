@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77,<85"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-research-tools"
+version = "0.1.0"
+description = "Local research data collection and reproducible feature generation"
+requires-python = ">=3.12"
+dependencies = ["numpy==2.5.4", "pandas==3.0.6"]
+
+[project.optional-dependencies]
+yahoo = ["yfinance==1.7.0"]
+parquet = ["pyarrow==26.0.0"]
+tradier = ["requests==2.34.2", "scipy==1.18.1", "lxml==6.1.3"]
+all = ["yfinance==1.7.0", "pyarrow==26.0.0", "requests==2.34.2", "scipy==1.18.1", "lxml==6.1.3"]
+
+[project.scripts]
+research-rsi-weekly = "rsi_weekly_study:main"
+research-directional = "directional_range_study:main"
+research-adaptive = "build_adaptive_range_dataset:main"
+research-earnings = "download_earnings_dates:main"
+research-compact-csv = "parquet_to_compact_csv:main"
+research-tradier-iv = "tradier_iv_collector:main"
+research-range = "range_collector.collect:main"
+research-intraday = "intraday_collector.collect_intraday:main"
+
+[tool.setuptools]
+packages = ["research_core", "rsi_research", "range_collector", "intraday_collector"]
+py-modules = ["rsi_weekly_study", "directional_range_study", "build_adaptive_range_dataset", "download_earnings_dates", "parquet_to_compact_csv", "tradier_iv_collector"]
+package-dir = {"" = "python_scritps", "range_collector" = "range_collector", "intraday_collector" = "intraday_collector"}

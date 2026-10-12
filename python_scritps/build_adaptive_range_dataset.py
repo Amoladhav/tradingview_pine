@@ -32,7 +32,7 @@ adaptive_range_symbols.csv
 
 INSTALL
 -------
-python3 -m pip install -U yfinance pandas numpy
+See docs/SETUP.md for the shared dependency installation.
 
 RUN
 ---
@@ -54,22 +54,14 @@ from pathlib import Path
 import time
 import numpy as np
 import pandas as pd
-import yfinance as yf
+import argparse
+from research_core.fetching import add_source_arguments, source_from_args
+from research_core.errors import safe_error_code
+from research_core.runtime import logged_main
+from research_core.io import atomic_csv, atomic_path
 
 # Same broad 66-stock / 11-sector universe used in the earlier study.
-SECTORS = {
-    "Communication Services": ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ"],
-    "Consumer Discretionary": ["AMZN", "TSLA", "HD", "MCD", "LOW", "NKE"],
-    "Consumer Staples": ["WMT", "COST", "PG", "KO", "PEP", "PM"],
-    "Energy": ["XOM", "CVX", "COP", "SLB", "EOG", "MPC"],
-    "Financials": ["JPM", "BAC", "WFC", "GS", "MS", "BLK"],
-    "Health Care": ["LLY", "JNJ", "ABBV", "MRK", "UNH", "TMO"],
-    "Industrials": ["GE", "CAT", "RTX", "UNP", "HON", "ETN"],
-    "Information Technology": ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD"],
-    "Materials": ["LIN", "SHW", "FCX", "NEM", "APD", "ECL"],
-    "Real Estate": ["PLD", "AMT", "EQIX", "WELL", "SPG", "O"],
-    "Utilities": ["NEE", "SO", "DUK", "CEG", "AEP", "SRE"],
-}
+from research_core.universe import SECTORS
 
 PERIOD = "10y"
 MAX_X = 60
@@ -77,26 +69,11 @@ ATR_LEN = 21
 MIN_HISTORY = 126
 
 
-def clean(df):
-    if df is None or df.empty:
-        return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    need = ["Open", "High", "Low", "Close", "Volume"]
-    if not all(c in df.columns for c in need):
-        return pd.DataFrame()
-    d = df[need].copy()
-    d.index = pd.to_datetime(d.index).tz_localize(None)
-    return d.dropna(subset=["Open", "High", "Low", "Close"])
+from research_core.prices import clean_ohlcv, true_range
 
 
-def true_range(d):
-    pc = d["Close"].shift(1)
-    return pd.concat([
-        d["High"] - d["Low"],
-        (d["High"] - pc).abs(),
-        (d["Low"] - pc).abs(),
-    ], axis=1).max(axis=1)
+def clean(frame):
+    return clean_ohlcv(frame, strip_timezone=True)
 
 
 def rolling_slope_norm(close, window):
@@ -328,23 +305,22 @@ def write_parquet_piece(frame, root, symbol):
     """
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"{symbol}.parquet"
-    frame.to_parquet(
-        path,
-        engine="pyarrow",
-        compression="zstd",
-        index=False,
-    )
+    with atomic_path(path) as temporary:
+        frame.to_parquet(temporary, engine="pyarrow", compression="zstd", index=False)
     return path
 
 
-def main():
+@logged_main
+def main(log):
+    parser = add_source_arguments(argparse.ArgumentParser(description=__doc__))
+    source = source_from_args(parser.parse_args())
     try:
         import pyarrow  # noqa: F401
     except ImportError:
         raise SystemExit(
             "This streaming version requires pyarrow.\n"
             "Install with:\n"
-            "  python3 -m pip install -U yfinance pandas numpy pyarrow"
+            "  See docs/SETUP.md for the shared dependency installation."
         )
 
     # Outputs are directories containing one Parquet file per symbol.
@@ -358,40 +334,42 @@ def main():
 
     for sector, symbols in SECTORS.items():
         for symbol in symbols:
-            print(f"{sector:25s} {symbol:6s}", end="  ", flush=True)
+            log.message(f"Processing history {len(status) + 1}/{sum(map(len, SECTORS.values()))}")
 
             try:
-                raw = yf.download(
+                raw = source.history(
                     symbol,
                     period=PERIOD,
                     interval="1d",
                     auto_adjust=True,
                     actions=False,
-                    progress=False,
-                    threads=False,
                 )
                 d = clean(raw)
 
                 if d.empty or len(d) < MIN_HISTORY + MAX_X + 10:
-                    print("insufficient history")
+                    log.message("insufficient history")
                     status.append({
                         "symbol": symbol,
                         "sector": sector,
                         "status": "insufficient",
                         "daily_bars": len(d),
                     })
+                    log.progress(success=False)
+                    atomic_csv(pd.DataFrame(status), SYMBOL_OUTPUT, index=False)
                     continue
 
                 anchors, outcomes = build_symbol_tables(d, symbol, sector)
 
                 if anchors.empty or outcomes.empty:
-                    print("no model rows")
+                    log.message("no model rows")
                     status.append({
                         "symbol": symbol,
                         "sector": sector,
                         "status": "empty",
                         "daily_bars": len(d),
                     })
+                    log.progress(success=False)
+                    atomic_csv(pd.DataFrame(status), SYMBOL_OUTPUT, index=False)
                     continue
 
                 anchor_path = write_parquet_piece(
@@ -401,7 +379,7 @@ def main():
                     outcomes, outcome_root, symbol
                 )
 
-                print(
+                log.message(
                     f"{len(d):,} bars -> "
                     f"{len(anchors):,} anchors / "
                     f"{len(outcomes):,} outcomes"
@@ -427,36 +405,38 @@ def main():
                 del raw
 
             except Exception as exc:
-                print(f"ERROR {exc}")
+                log.error(exc)
                 status.append({
                     "symbol": symbol,
                     "sector": sector,
                     "status": "error",
-                    "error": repr(exc),
+                    "error": safe_error_code(exc),
                 })
+
+            log.progress(success=status[-1]["status"] == "ok")
 
             # Rewrite audit after every symbol so an interrupted run still has
             # useful progress information.
-            pd.DataFrame(status).to_csv(SYMBOL_OUTPUT, index=False)
+            atomic_csv(pd.DataFrame(status), SYMBOL_OUTPUT, index=False)
             time.sleep(0.05)
 
     audit = pd.DataFrame(status)
-    audit.to_csv(SYMBOL_OUTPUT, index=False)
+    atomic_csv(audit, SYMBOL_OUTPUT, index=False)
 
     ok = audit[audit["status"] == "ok"] if not audit.empty else pd.DataFrame()
 
-    print("\nDONE")
-    print(f"Successful symbols: {len(ok)}")
+    log.message("Output writing finished; run summary follows.")
+    log.message(f"Successful symbols: {len(ok)}")
     if not ok.empty:
-        print(f"Anchor rows: {int(ok['anchor_rows'].sum()):,}")
-        print(f"Outcome rows: {int(ok['outcome_rows'].sum()):,}")
-    print(f"Anchor dataset directory: {anchor_root}/")
-    print(f"Outcome dataset directory: {outcome_root}/")
-    print(f"Audit: {SYMBOL_OUTPUT}")
-    print("\nFor upload, archive the two directories:")
-    print("  tar -czf adaptive_range_anchors.tar.gz adaptive_range_anchors/")
-    print("  tar -czf adaptive_range_outcomes.tar.gz adaptive_range_outcomes/")
+        log.message(f"Anchor rows: {int(ok['anchor_rows'].sum()):,}")
+        log.message(f"Outcome rows: {int(ok['outcome_rows'].sum()):,}")
+    log.message(f"Anchor dataset directory: {anchor_root}/")
+    log.message(f"Outcome dataset directory: {outcome_root}/")
+    log.message(f"Audit: {SYMBOL_OUTPUT}")
+    log.message("\nFor upload, archive the two directories:")
+    log.message("  tar -czf adaptive_range_anchors.tar.gz adaptive_range_anchors/")
+    log.message("  tar -czf adaptive_range_outcomes.tar.gz adaptive_range_outcomes/")
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

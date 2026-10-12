@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Download historical earnings dates for the symbols already present in
-directional_excursions.csv.gz.
+directional_excursions.csv.
 
 Input
 -----
-directional_excursions.csv.gz
+directional_excursions.csv
 
 Output
 ------
@@ -14,7 +14,7 @@ earnings_coverage.csv
 
 Install
 -------
-python3 -m pip install -U yfinance pandas
+See docs/SETUP.md for the shared dependency installation.
 
 Run
 ---
@@ -35,19 +35,19 @@ before using DTE/DFE results.
 """
 
 from pathlib import Path
-import time
 import pandas as pd
-import yfinance as yf
+import argparse
+from research_core.fetching import add_source_arguments, source_from_args
+from research_core.errors import safe_error_code
+from research_core.runtime import logged_main
+from research_core.io import atomic_csv
 
-INPUT = Path("directional_excursions.csv.gz")
+INPUT = Path("directional_excursions.csv")
 OUTPUT = Path("earnings_dates.csv")
 COVERAGE = Path("earnings_coverage.csv")
 
 # Ask for more history than we likely need. yfinance may cap what Yahoo returns.
 EARNINGS_LIMIT = 100
-
-# A short delay is intentionally conservative around Yahoo requests.
-REQUEST_DELAY_SECONDS = 0.15
 
 
 def normalize_earnings_frame(symbol, frame):
@@ -109,17 +109,22 @@ def normalize_earnings_frame(symbol, frame):
     return out
 
 
-def main():
-    if not INPUT.exists():
-        raise SystemExit(
-            f"Missing {INPUT}. Put this script in the same directory as "
-            "directional_excursions.csv.gz, or edit INPUT at the top."
-        )
+@logged_main
+def main(log):
+    parser = add_source_arguments(argparse.ArgumentParser(description=__doc__))
+    parser.add_argument('--input', type=Path, default=INPUT,
+                        help='Directional excursion CSV; .csv.gz input is also supported.')
+    parser.add_argument('--output', type=Path, default=OUTPUT, help='Derived earnings CSV path.')
+    parser.add_argument('--coverage', type=Path, default=COVERAGE, help='Coverage CSV path.')
+    args = parser.parse_args()
+    source = source_from_args(args)
+    if not args.input.exists():
+        raise SystemExit('INPUT_NOT_FOUND: supply --input with the directional excursion CSV.')
 
     # Read only the columns needed to determine symbols and requested coverage.
     base = pd.read_csv(
-        INPUT,
-        compression="gzip",
+        args.input,
+        compression="infer",
         usecols=["symbol", "anchor_dt"],
         parse_dates=["anchor_dt"],
     )
@@ -129,40 +134,35 @@ def main():
     requested_min = base.groupby("symbol")["anchor_dt"].min()
     requested_max = base.groupby("symbol")["anchor_dt"].max()
 
-    print(f"Found {len(symbols)} symbols.")
-    print(
-        "Anchor coverage:",
-        base["anchor_dt"].min(),
-        "through",
-        base["anchor_dt"].max(),
+    log.message(f"Found {len(symbols)} symbols.")
+    log.message(
+        f"Anchor coverage: {base['anchor_dt'].min()} through {base['anchor_dt'].max()}"
     )
 
     all_events = []
     coverage_rows = []
 
     for i, symbol in enumerate(symbols, start=1):
-        print(f"[{i:02d}/{len(symbols):02d}] {symbol:6s}", end="  ")
+        log.message(f"Processing earnings {i}/{len(symbols)}")
 
         status = "ok"
         error = ""
 
         try:
-            ticker = yf.Ticker(symbol)
-
-            # Preferred yfinance interface for historical earnings events.
-            frame = ticker.get_earnings_dates(limit=EARNINGS_LIMIT)
+            frame = source.earnings(symbol, limit=EARNINGS_LIMIT)
             events = normalize_earnings_frame(symbol, frame)
 
         except Exception as exc:
             events = pd.DataFrame()
             status = "error"
-            error = repr(exc)
+            error = safe_error_code(exc)
+            log.error(exc)
 
         if events.empty:
             if status == "ok":
                 status = "empty"
 
-            print(status)
+            log.message(status)
 
             coverage_rows.append({
                 "symbol": symbol,
@@ -181,7 +181,7 @@ def main():
             first_event = pd.to_datetime(events["earnings_date"]).min()
             last_event = pd.to_datetime(events["earnings_date"]).max()
 
-            print(
+            log.message(
                 f"{len(events):3d} events  "
                 f"{first_event.date()} -> {last_event.date()}"
             )
@@ -197,14 +197,14 @@ def main():
                 "error": error,
             })
 
-        time.sleep(REQUEST_DELAY_SECONDS)
+        log.progress(success=status == "ok")
 
     coverage = pd.DataFrame(coverage_rows)
-    coverage.to_csv(COVERAGE, index=False)
+    atomic_csv(coverage, args.coverage, index=False)
 
     if not all_events:
         raise SystemExit(
-            "No earnings dates were returned. earnings_coverage.csv was still "
+            "No earnings dates were returned. The coverage CSV was still "
             "written; inspect it for Yahoo/yfinance errors."
         )
 
@@ -224,14 +224,14 @@ def main():
         ["symbol", "earnings_date"]
     )
 
-    earnings.to_csv(OUTPUT, index=False)
+    atomic_csv(earnings, args.output, index=False)
 
-    print("\nDONE")
-    print(f"Earnings rows: {len(earnings):,}")
-    print(f"Symbols with earnings: {earnings['symbol'].nunique()}")
-    print(f"Wrote: {OUTPUT}")
-    print(f"Wrote: {COVERAGE}")
-    print(
+    log.message("Output writing finished; run summary follows.")
+    log.message(f"Earnings rows: {len(earnings):,}")
+    log.message(f"Symbols with earnings: {earnings['symbol'].nunique()}")
+    log.message(f"Wrote: {args.output}")
+    log.message(f"Wrote: {args.coverage}")
+    log.message(
         "\nIMPORTANT: Upload BOTH files. The coverage report tells us whether "
         "Yahoo supplied enough history for each stock; missing old earnings "
         "must not silently become false DTE/DFE observations."
@@ -239,4 +239,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

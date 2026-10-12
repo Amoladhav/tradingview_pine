@@ -20,6 +20,10 @@ import time
 from pathlib import Path
 
 import requests
+from research_core.fetching import fetch_json
+from research_core.errors import safe_error_code
+from research_core.io import symbols_from_csv, validate_symbol
+from research_core.runtime import logged_main
 from scipy.optimize import brentq
 from scipy.stats import norm
 
@@ -28,22 +32,8 @@ TARGETS = (7, 14, 30, 60)
 
 
 def api(session, path, params):
-    for attempt in range(4):
-        try:
-            r = session.get(BASE + path, params=params, timeout=25)
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
-                time.sleep(2 ** attempt)
-                continue
-            r.raise_for_status()
-            payload = r.json()
-            if isinstance(payload, dict) and payload.get('errors'):
-                raise RuntimeError(str(payload['errors']))
-            return payload
-        except (requests.RequestException, ValueError):
-            if attempt == 3:
-                raise
-            time.sleep(2 ** attempt)
-    raise RuntimeError('API request failed')
+    return fetch_json(session, BASE + path, params,
+                      Path('artifacts/private/tradier-captures'))
 
 
 def as_list(value):
@@ -91,28 +81,22 @@ def write_upsert(path, rows, keys):
         return
     previous = []
     if path.exists():
-        with path.open(newline='') as f:
+        with path.open(encoding='utf-8', newline='') as f:
             previous = list(csv.DictReader(f))
     combined = {tuple(str(row.get(k, '')) for k in keys): row for row in previous + rows}
     fields = list(dict.fromkeys(k for row in previous + rows for k in row))
     tmp = path.with_suffix('.tmp')
-    with tmp.open('w', newline='') as f:
+    with tmp.open('w', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(combined.values())
     tmp.replace(path)
 
 
-def symbols_from_csv(path):
-    with open(path, newline='') as f:
-        reader = csv.DictReader(f)
-        if 'symbol' not in (reader.fieldnames or []):
-            raise ValueError('Input CSV must contain symbol column')
-        return sorted({row['symbol'].strip().upper() for row in reader if row.get('symbol', '').strip()})
-
-
-def main():
+@logged_main
+def main(log):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--fetch', action='store_true', help='Explicit user-run sandbox API access; required before reading credentials')
     parser.add_argument('--symbols', default='AAPL', help='Comma-separated tickers')
     parser.add_argument('--symbols-csv', help='CSV with symbol column, e.g. universe.csv')
     parser.add_argument('--rate', type=float, default=0.04, help='Assumed annual risk-free rate decimal, default 0.04')
@@ -121,10 +105,15 @@ def main():
     parser.add_argument('--pause', type=float, default=0.2, help='Seconds between requests')
     args = parser.parse_args()
 
+    if not args.fetch:
+        parser.error('--fetch is required for user-run sandbox requests')
+    if args.pause < 0 or not math.isfinite(args.rate) or not math.isfinite(args.dividend_yield):
+        parser.error('pause must be nonnegative and rates must be finite')
+
     token = os.environ.get('TRADIER_SANDBOX_TOKEN', '').strip()
     if not token:
         sys.exit('Set TRADIER_SANDBOX_TOKEN environment variable (do not paste key into code).')
-    symbols = symbols_from_csv(args.symbols_csv) if args.symbols_csv else sorted({s.strip().upper() for s in args.symbols.split(',') if s.strip()})
+    symbols = symbols_from_csv(args.symbols_csv) if args.symbols_csv else sorted({validate_symbol(s) for s in args.symbols.split(',') if s.strip()})
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     session = requests.Session()
@@ -205,17 +194,19 @@ def main():
                     'assumed_dividend_yield': args.dividend_yield,
                     'note': 'Estimated IV; sandbox does not provide vendor Greeks/IV; NOT tenor-interpolated',
                 })
-            print(f'{symbol}: collected {len(chosen)} expirations; IV estimates may be blank')
+            log.progress(success=True)
         except Exception as exc:
-            print(f'{symbol}: ERROR: {exc}', file=sys.stderr)
+            log.error(exc)
+            log.progress(success=False)
         time.sleep(args.pause)
 
     write_upsert(outdir / 'tradier_iv_snapshots.csv', summary_rows, ['snapshot_date_utc', 'symbol', 'target_calendar_dte'])
     write_upsert(outdir / 'tradier_iv_contracts.csv', contract_rows, ['snapshot_date_utc', 'symbol', 'option_symbol'])
-    print(f'Saved {len(summary_rows)} target-horizon rows and {len(contract_rows)} ATM option quote rows to {outdir}')
+    session.close()
+    log.message(f'Saved {len(summary_rows)} target-horizon rows and {len(contract_rows)} ATM option quote rows to {outdir}')
     if not summary_rows:
         sys.exit(1)
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
